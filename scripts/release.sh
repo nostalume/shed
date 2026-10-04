@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Update Cargo's package version and create the matching annotated Git tag.
-# Usage: ./scripts/release.sh 0.1.6
+# Update package manifests and create the matching annotated Git tag.
+# Usage: ./scripts/release.sh 0.1.7
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -55,10 +55,22 @@ updated, count = re.subn(
 if count != 1:
     raise SystemExit("Cargo.lock shed package version was not found")
 lock.write_text(updated)
+
+nix_file = Path("nix/shed.nix")
+text = nix_file.read_text()
+updated, count = re.subn(
+    r'(?m)^([ \t]*version[ \t]*=[ \t]*")[^"]+("[ \t]*;[ \t]*\r?)$',
+    rf'\g<1>{version}\g<2>',
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("nix/shed.nix version was not found")
+nix_file.write_text(updated)
 PY
 
 cargo check --locked
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock nix/shed.nix
 if ! git diff --cached --quiet; then
     git commit -m "chore: release v${version}"
 fi

@@ -39,6 +39,9 @@ jobs:
             - name: Update nix/shed.nix hashes
               run: bash nix/update.sh "${{ steps.version.outputs.version }}"
 
+            - name: Validate Nix flake
+              run: nix flake check --no-build --no-write-lock-file
+
             - name: Commit updated derivation
               run: |
                   git config user.name  "github-actions[bot]"

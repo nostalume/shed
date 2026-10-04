@@ -48,8 +48,11 @@ scoop update shed
 **Profile install**
 
 ```sh
-nix profile install github:nostalume/shed
+nix profile install github:nostalume/shed#shed
 ```
+
+The flake also exposes `shed` as its default package, so
+`nix profile install github:nostalume/shed` is equivalent.
 
 **Flake integration**
 
@@ -89,6 +92,12 @@ nix-env --file '<nixpkgs>' --install \
   --expr '(import <nixpkgs> {}).callPackage ./nix/shed.nix {}'
 ```
 
+Run the packaged binary directly with:
+
+```sh
+nix run github:nostalume/shed -- --version
+```
+
 ### macOS & Linux — curl installer
 
 ```sh
@@ -115,12 +124,13 @@ cross build --release --target aarch64-apple-darwin
 Use the release helper rather than editing the manifest and tag separately:
 
 ```sh
-bash scripts/release.sh 0.1.6
-# Windows PowerShell: .\scripts\release.ps1 0.1.6
+bash scripts/release.sh 0.1.7
+# Windows PowerShell: .\scripts\release.ps1 0.1.7
 ```
 
-It updates Cargo's package version and lockfile, commits them, creates the
-matching tag, and pushes both refs atomically.
+It updates Cargo's package version, lockfile, and the Nix manifest version,
+commits them, creates the matching tag, and pushes both refs atomically. Nix
+artifact hashes are refreshed after the release binaries are built.
 
 ## shell rc (write once, forget forever)
 

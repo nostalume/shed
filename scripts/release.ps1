@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-  Update Cargo's package version and create the matching annotated Git tag.
+  Update package manifests and create the matching annotated Git tag.
 .EXAMPLE
-  .\scripts\release.ps1 0.1.6
+  .\scripts\release.ps1 0.1.7
 #>
 [CmdletBinding()]
 param(
@@ -49,8 +49,19 @@ $updated = [regex]::Replace(
 if ($updated -eq $lock) { throw "Cargo.lock shed package version was not found" }
 Set-Content -Path $lockPath -Value $updated -NoNewline
 
+$nixPath = Join-Path (Get-Location) 'nix/shed.nix'
+$nix = Get-Content -Raw $nixPath
+$updated = [regex]::Replace(
+    $nix,
+    '(?m)^([ \t]*version[ \t]*=[ \t]*")[^"]+("[ \t]*;[ \t]*\r?)$',
+    { param($m) $m.Groups[1].Value + $Version + $m.Groups[2].Value },
+    1
+)
+if ($updated -eq $nix) { throw "nix/shed.nix version was not found" }
+Set-Content -Path $nixPath -Value $updated -NoNewline
+
 cargo check --locked
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock nix/shed.nix
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     git commit -m "chore: release v$Version"

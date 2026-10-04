@@ -22,18 +22,19 @@ runs the same three commands on every push and pull request to `main`.
 ## 2. Synchronous versioned release
 
 Do not edit `Cargo.toml`, commit, and tag separately. The release helpers update
-`Cargo.toml` and `Cargo.lock`, commit the version bump, create the matching
-annotated tag, and push both refs atomically:
+`Cargo.toml`, `Cargo.lock`, and the version field in `nix/shed.nix`, commit the
+version bump, create the matching annotated tag, and push both refs atomically:
 
 ```sh
-bash scripts/release.sh 0.1.6
+bash scripts/release.sh 0.1.7
 # Windows PowerShell:
-.\scripts\release.ps1 0.1.6
+.\scripts\release.ps1 0.1.7
 ```
 
 The single version argument is applied to Cargo and reused for the Git tag;
 there is no second version to reconcile. Pushing the tag triggers the GitHub
-Actions release workflow.
+Actions release workflow. The Nix hashes are refreshed afterward by
+`nix-update.yml`, once the release binaries exist.
 
 ---
 
@@ -136,116 +137,27 @@ curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh
 
 ---
 
-## 6. Nix — binary derivation
+## 6. Nix — binary derivation and flake
 
-The zero-dependency static musl binary makes shed trivial to package for Nix.
-The derivation below fetches the pre-built binary from a GitHub Release rather
-than building from source, which avoids pulling in the Rust toolchain.
-
-Create `nix/shed.nix` (or inline into your `flake.nix`):
-
-```nix
-{ lib, stdenv, fetchurl, autoPatchelfHook }:
-
-let
-  version = "0.1.3";
-  sources = {
-    "x86_64-linux" = {
-      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-x86_64";
-      sha256 = lib.fakeSha256; # replace with actual hash after first fetch
-    };
-    "aarch64-linux" = {
-      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-aarch64";
-      sha256 = lib.fakeSha256;
-    };
-    "x86_64-darwin" = {
-      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-x86_64";
-      sha256 = lib.fakeSha256;
-    };
-    "aarch64-darwin" = {
-      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-aarch64";
-      sha256 = lib.fakeSha256;
-    };
-  };
-  src = sources.${stdenv.hostPlatform.system}
-    or (throw "shed: unsupported platform ${stdenv.hostPlatform.system}");
-in
-stdenv.mkDerivation {
-  pname   = "shed";
-  inherit version;
-
-  src = fetchurl {
-    inherit (src) url sha256;
-  };
-
-  # Linux musl binaries are fully static — no patchelf needed.
-  # Darwin binaries link only against system frameworks already present.
-  dontUnpack = true;
-  dontBuild  = true;
-
-  installPhase = ''
-    install -Dm755 $src $out/bin/shed
-  '';
-
-  meta = with lib; {
-    description = "Shell Environment Declaration — compile env.shed to bash, zsh, fish, or pwsh";
-    homepage    = "https://github.com/nostalume/shed";
-    license     = licenses.mit;
-    maintainers = [];
-    platforms   = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-    mainProgram = "shed";
-  };
-}
-```
-
-### Using with a flake
-
-`flake.nix` in your dotfiles:
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-  };
-
-  outputs = { self, nixpkgs }: let
-    forAllSystems = nixpkgs.lib.genAttrs [
-      "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"
-    ];
-  in {
-    packages = forAllSystems (system: {
-      shed = nixpkgs.legacyPackages.${system}.callPackage ./nix/shed.nix {};
-    });
-  };
-}
-```
-
-Install it:
+The zero-dependency release binaries are packaged by the canonical
+[`nix/shed.nix`](../nix/shed.nix) derivation. The repository
+[`flake.nix`](../flake.nix) exposes it as both `shed` and the default package:
 
 ```sh
-nix profile install .#shed
+nix profile install github:nostalume/shed#shed
+nix run github:nostalume/shed -- --version
 ```
 
-Or add to a NixOS / home-manager configuration:
+The derivation supports Linux and Darwin on x86_64 and aarch64. Nix verifies
+each downloaded release binary with its SRI hash; `nix/update.sh` refreshes the
+version and hashes after each GitHub release.
+
+For a non-flake installation, call the canonical derivation directly:
 
 ```nix
 # home.nix
 home.packages = [ (pkgs.callPackage ./nix/shed.nix {}) ];
 ```
-
-### Getting the correct SHA-256 hashes
-
-After updating the version, fetch each hash with:
-
-```sh
-nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-linux-x86_64
-nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-linux-aarch64
-nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-macos-x86_64
-nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-macos-aarch64
-```
-
-Replace each `lib.fakeSha256` in the derivation with the output of the
-corresponding command (a base32 hash string).
 
 ---
 
