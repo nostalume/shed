@@ -31,7 +31,7 @@ $cargoPath = Join-Path (Get-Location) 'Cargo.toml'
 $cargo = Get-Content -Raw $cargoPath
 $updated = [regex]::Replace(
     $cargo,
-    '(?m)^(version[ \t]*=[ \t]*")[^"]+("[ \t]*)$',
+    '(?m)^(version[ \t]*=[ \t]*")[^"]+("[ \t]*\r?)$',
     { param($m) $m.Groups[1].Value + $Version + $m.Groups[2].Value },
     1
 )
