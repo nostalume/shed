@@ -1,6 +1,6 @@
 [package]
 name        = "shed"
-version     = "0.1.5"
+version     = "0.1.6"
 edition     = "2024"
 rust-version = "1.85"
 description = "Shell Environment Declaration — compile env.shed to bash, zsh, fish, or pwsh"
