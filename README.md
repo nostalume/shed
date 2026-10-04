@@ -10,26 +10,30 @@ shed zsh   ~/.config/shed/env.shed   # → zsh
 shed fish  ~/.config/shed/env.shed   # → fish
 shed pwsh  ~/.config/shed/env.shed   # → PowerShell
 shed check ~/.config/shed/env.shed   # → parse & validate only
+shed --target-os linux bash env.shed # → generate Linux branches explicitly
 ```
 
 ## install
 
+The project uses Rust 2024, requires Rust 1.85 or newer, and pins Rust 1.98.1
+for reproducible local development and CI via `rust-toolchain.toml`.
+
 ### cargo (any platform)
 
 ```sh
-git clone https://github.com/lvyuemeng/shed.git
+git clone https://github.com/nostalume/shed.git
 cd shed
 cargo install --path .
 ```
 
 ### pre-built binaries
 
-Grab the right binary from the [releases page](https://github.com/lvyuemeng/shed/releases) — no runtime required.
+Grab the right binary from the [releases page](https://github.com/nostalume/shed/releases) — no runtime required.
 
 ### Windows — Scoop
 
 ```powershell
-scoop bucket add shed https://github.com/lvyuemeng/shed
+scoop bucket add shed https://github.com/nostalume/shed
 scoop install shed/shed
 ```
 
@@ -44,7 +48,7 @@ scoop update shed
 **Profile install**
 
 ```sh
-nix profile install github:lvyuemeng/shed
+nix profile install github:nostalume/shed
 ```
 
 **Flake integration**
@@ -54,7 +58,7 @@ nix profile install github:lvyuemeng/shed
 {
   inputs = {
     nixpkgs.url    = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    shed-src.url   = "github:lvyuemeng/shed";
+    shed-src.url   = "github:nostalume/shed";
     shed-src.flake = false;
   };
 
@@ -88,13 +92,13 @@ nix-env --file '<nixpkgs>' --install \
 ### macOS & Linux — curl installer
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh
 ```
 
 To install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh -s v0.2.0
+curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh -s v0.2.0
 ```
 
 ### cross-compile from source
@@ -105,6 +109,18 @@ Uses [`cross`](https://github.com/cross-rs/cross):
 cross build --release --target x86_64-pc-windows-gnu
 cross build --release --target aarch64-apple-darwin
 ```
+
+## releasing
+
+Use the release helper rather than editing the manifest and tag separately:
+
+```sh
+bash scripts/release.sh 0.1.6
+# Windows PowerShell: .\scripts\release.ps1 0.1.6
+```
+
+It updates Cargo's package version and lockfile, commits them, creates the
+matching tag, and pushes both refs atomically.
 
 ## shell rc (write once, forget forever)
 
@@ -134,6 +150,9 @@ shed pwsh ~/.config/shed/env.shed | Invoke-Expression
 | `path-` | `path- dir`        | Append `dir` to `PATH` (dedup-guarded)                                       |
 | `call`  | `call cmd [args…]` | Run eval-init style initialisers; `{shell}` expands to the target shell name |
 | `alias` | `alias name body`  | Define a shell alias                                                         |
+
+`call` and alias bodies are intentional shell syntax and are emitted as trusted
+input; do not use them with untrusted configuration files.
 
 ### conditions
 
@@ -168,6 +187,14 @@ Use nested `if` blocks when you need explicit grouping.
 `if shell <name>` and `if os <name>` branches that cannot match the compile
 target are removed from the output entirely. Dead `elif` / `else` chains are
 collapsed too. The emitted script contains no unreachable code.
+
+`os` pruning follows the Rust compilation target (`cfg(target_os)`) by default,
+not the machine where the generated script is later run. Use `--target-os` when
+generating for a different operating system:
+
+```sh
+shed --target-os windows pwsh env.shed
+```
 
 ```sh
 # compiled for bash on Linux:
@@ -204,6 +231,8 @@ Paths in `path+`, `path-`, and `exists` are processed at parse time:
    path separator.
 
 No filesystem access is performed; the path does not need to exist at compile time.
+Values emitted inside double-quoted shell strings escape delimiters and control
+characters while preserving documented shell-variable references.
 
 ```sh
 # All of the following are valid and passed through correctly:
@@ -238,7 +267,7 @@ never duplicates entries.
 | -------- | ------------------------------------------------------- |
 | bash/zsh | `[[ "${PATH}" != *"dir"* ]] && export PATH="dir:$PATH"` |
 | fish     | `fish_add_path` deduplicates automatically              |
-| pwsh     | `if ($env:PATH -notlike '*dir*') { ... }`               |
+| pwsh     | `if (($env:PATH -split ';') -notcontains "dir") { ... }` |
 
 ### comments
 
@@ -246,6 +275,9 @@ never duplicates entries.
 # full-line comment
 set KEY value  # inline comment
 ```
+
+Comments begin with `#` outside quoted values. Quoted values may contain
+spaces and `#`, for example `set GREETING "hello world # users"`.
 
 ## example
 
@@ -362,12 +394,12 @@ if ($IsMacOS) {
   $env:BROWSER = "xdg-open"
 }
 if (Test-Path "$HOME/.cargo/bin") {
-  if ($env:PATH -notlike '*$HOME/.cargo/bin*') { $env:PATH = "$HOME/.cargo/bin;$env:PATH" }
+  if (($env:PATH -split ';') -notcontains "$HOME/.cargo/bin") { $env:PATH = "$HOME/.cargo/bin;$env:PATH" }
   $env:CARGO_HOME = "$HOME/.cargo"
   $env:RUSTUP_HOME = "$HOME/.rustup"
 }
 if ((Test-Path env:CARGO_HOME)) {
-  if ($env:PATH -notlike '*$CARGO_HOME/bin*') { $env:PATH = "$CARGO_HOME/bin;$env:PATH" }
+  if (($env:PATH -split ';') -notcontains "$CARGO_HOME/bin") { $env:PATH = "$CARGO_HOME/bin;$env:PATH" }
 }
 if ((Get-Command zoxide -ErrorAction SilentlyContinue) -and ($IsLinux)) {
   Invoke-Expression (& zoxide init powershell)

@@ -1,11 +1,11 @@
 #!/bin/sh
 # shed installer — Linux and macOS
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh -s v0.2.0
+#   curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh -s v0.2.0
 set -e
 
-REPO="lvyuemeng/shed"
+REPO="nostalume/shed"
 VERSION="${1:-latest}"
 
 OS=$(uname -s)
@@ -38,10 +38,26 @@ else
 fi
 
 TMP=$(mktemp)
-trap 'rm -f "$TMP"' EXIT
+SUM=$(mktemp)
+trap 'rm -f "$TMP" "$SUM"' EXIT
 
 echo "Downloading shed from $URL ..."
 curl -fsSL "$URL" -o "$TMP"
+curl -fsSL "${URL}.sha256" -o "$SUM"
+
+EXPECTED=$(awk '{print $1}' "$SUM")
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL=$(shasum -a 256 "$TMP" | awk '{print $1}')
+else
+  echo "shed: no SHA-256 utility found; cannot verify download" >&2
+  exit 1
+fi
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "shed: checksum verification failed" >&2
+  exit 1
+fi
 chmod +x "$TMP"
 mv "$TMP" "$DEST/shed"
 

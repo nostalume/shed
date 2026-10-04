@@ -41,6 +41,14 @@ fn set_all_shells() {
     assert_eq!(pwsh("set EDITOR nvim"), "$env:EDITOR = \"nvim\"");
 }
 
+#[test]
+fn pwsh_set_preserves_literal_backslashes() {
+    assert_eq!(
+        pwsh(r#"set TOOL C:\tools\bin"#),
+        "$env:TOOL = \"C:\\tools\\bin\""
+    );
+}
+
 /// path+ / path- generate the correct PATH mutation per shell,
 /// wrapped in a deduplication guard (bash/pwsh) or natively deduplicating (fish).
 #[test]
@@ -79,7 +87,7 @@ fn path_prepend_and_append() {
         p_prepend
     );
     assert!(
-        p_prepend.contains("-notlike"),
+        p_prepend.contains("-notcontains"),
         "pwsh prepend guard: {}",
         p_prepend
     );
@@ -131,6 +139,7 @@ fn if_have_all_shells() {
 /// `if os` with elif: on Linux the prune pass folds os statically,
 /// so branches that match the compile OS are inlined and others dropped.
 #[test]
+#[allow(unused_variables)]
 fn if_os_with_elif() {
     let src = "if os darwin\nset BROWSER open\nelif os linux\nset BROWSER xdg-open\nend";
 
@@ -397,6 +406,7 @@ fn if_not_have_all_shells() {
 /// On macOS: `os linux` folds to AlwaysFalse → entire block dropped.
 /// On other / unknown OS: both runtime checks are preserved.
 #[test]
+#[allow(unused_variables)]
 fn if_and_condition_all_shells() {
     let src = "if have cargo and os linux\npath+ $HOME/.cargo/bin\nend";
 
@@ -473,6 +483,7 @@ fn if_and_condition_all_shells() {
 /// On macOS: darwin=true → Or(true,_)=AlwaysTrue → body inlined.
 /// On other: both runtime checks kept.
 #[test]
+#[allow(unused_variables)]
 fn if_or_condition_all_shells() {
     let src = "if os darwin or os linux\nset POSIX 1\nend";
 
@@ -764,6 +775,11 @@ fn path_dedup_guard_present() {
     assert!(!f.contains("[[ "), "fish: unexpected guard: {}", f);
 
     let p = pwsh("path+ C:/tools");
-    assert!(p.contains("-notlike"), "pwsh guard missing: {}", p);
+    assert!(p.contains("-notcontains"), "pwsh guard missing: {}", p);
+    assert!(
+        p.contains("-split ';'"),
+        "pwsh component guard missing: {}",
+        p
+    );
     assert!(p.contains("C:/tools"), "pwsh dir missing: {}", p);
 }

@@ -13,6 +13,7 @@ pub struct Parser {
     /// Anchor directory used to resolve relative `path+` / `path-` tokens.
     /// `None` when reading from stdin (no meaningful anchor).
     base: Option<PathBuf>,
+    lex_error: Option<ParseError>,
 }
 
 // ── free helpers ─────────────────────────────────────────────────────────────
@@ -95,6 +96,75 @@ fn contains_shell_variable(s: &str) -> bool {
     s.contains('$')
 }
 
+fn is_windows_absolute(s: &str) -> bool {
+    let b = s.as_bytes();
+    (b.len() >= 3 && b[1] == b':' && matches!(b[2], b'/' | b'\\'))
+        || s.starts_with("\\\\")
+        || s.starts_with("//")
+}
+
+fn valid_env_key(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c == '_' || c.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+fn valid_command(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| !c.is_whitespace() && !matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')'))
+}
+
+/// Tokenize one source line while preserving quote characters for the parser's
+/// existing outer-quote handling. Whitespace inside quotes stays in the same
+/// token, and `#` starts a comment only outside quotes.
+fn tokenize_line(raw: &str) -> Result<Vec<String>, &'static str> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut chars = raw.chars();
+
+    while let Some(ch) = chars.next() {
+        if let Some(q) = quote {
+            if ch == '\\' {
+                current.push(ch);
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            } else {
+                current.push(ch);
+                if ch == q {
+                    quote = None;
+                }
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' if current.is_empty() => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '\'' | '"' => current.push(ch),
+            '#' => break,
+            c if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if quote.is_some() {
+        return Err("unterminated quote");
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
 /// Resolve a path token from a shed source file.
 ///
 /// Rules (applied in order):
@@ -120,6 +190,9 @@ pub fn resolve_path(raw: &str, base: Option<&Path>) -> String {
     }
 
     // ── Step 2: plain path — resolve relative paths against base dir ──────────
+    if is_windows_absolute(raw) {
+        return raw.replace('\\', "/");
+    }
     let expanded = PathBuf::from(raw);
     let resolved = if expanded.is_relative() {
         base.map(|b| b.join(&expanded)).unwrap_or(expanded)
@@ -145,29 +218,30 @@ impl Parser {
     /// relative and home-prefixed `path+` / `path-` tokens at parse time.
     /// Pass `None` when reading from stdin (no anchor directory).
     pub fn new(src: &str, base: Option<PathBuf>) -> Self {
-        let lines = src
-            .lines()
-            .enumerate()
-            .filter_map(|(i, raw)| {
-                // SAFETY: split('#') always yields at least one element.
-                let s = raw.split('#').next().unwrap_or("").trim();
-                if s.is_empty() {
-                    None
-                } else {
-                    let mut toks = Vec::with_capacity(4);
-                    toks.extend(s.split_whitespace().map(String::from));
-                    Some((i + 1, toks))
+        let mut lines = Vec::new();
+        let mut lex_error = None;
+        for (i, raw) in src.lines().enumerate() {
+            match tokenize_line(raw.trim()) {
+                Ok(toks) if !toks.is_empty() => lines.push((i + 1, toks)),
+                Ok(_) => {}
+                Err(msg) if lex_error.is_none() => {
+                    lex_error = Some(ParseError::at(i + 1, msg));
                 }
-            })
-            .collect();
+                Err(_) => {}
+            }
+        }
         Self {
             lines,
             pos: 0,
             base,
+            lex_error,
         }
     }
 
     pub fn parse(&mut self) -> Result<Vec<Node>, ParseError> {
+        if let Some(error) = self.lex_error.take() {
+            return Err(error);
+        }
         self.block(&[])
     }
 
@@ -197,11 +271,20 @@ impl Parser {
         let node = match toks[0].as_str() {
             "set" => {
                 let key = tok(toks, 1, ln, "usage: set KEY VALUE")?;
+                if !valid_env_key(&key) {
+                    return Err(ParseError::at(
+                        ln,
+                        "usage: set KEY VALUE (KEY must be a shell variable name)",
+                    ));
+                }
                 let val = tail_stripped(toks, 2)
                     .ok_or_else(|| ParseError::at(ln, "usage: set KEY VALUE"))?;
                 Node::Set { key, val }
             }
             kw @ ("path+" | "path-") => {
+                if toks.len() != 2 {
+                    return Err(ParseError::at(ln, format!("usage: {} DIR", kw)));
+                }
                 let direction = match kw {
                     "path+" => PathDir::Prepend,
                     _ => PathDir::Append,
@@ -212,6 +295,9 @@ impl Parser {
             }
             "call" => {
                 let cmd = tok_stripped(toks, 1, ln, "usage: call CMD [ARGS]")?;
+                if !valid_command(&cmd) {
+                    return Err(ParseError::at(ln, "call requires one command token"));
+                }
                 let args = tail_joined(toks, 2).unwrap_or_default();
                 Node::Call { cmd, args }
             }
@@ -226,7 +312,7 @@ impl Parser {
                     .get(1..)
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| ParseError::at(ln, "usage: if <cond-type> <value>"))?;
-                let cond = Self::parse_cond(ln, cond_slice)?;
+                let cond = self.parse_cond(ln, cond_slice)?;
                 self.pos += 1;
                 return Ok(Node::If(self.parse_if(ln, cond)?));
             }
@@ -236,57 +322,62 @@ impl Parser {
         Ok(node)
     }
 
-    fn parse_cond(ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
-        Self::parse_or(ln, toks)
+    fn parse_cond(&self, ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+        self.parse_or(ln, toks)
     }
 
     /// Lowest precedence: `or`. Left-associative.
     ///
     /// Splits at the LAST `or`; left subtree recurses through `parse_or`,
     /// right side is parsed by `parse_and`.
-    fn parse_or(ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+    fn parse_or(&self, ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
         if let Some(op) = last_op_pos(toks, "or") {
-            let left = Self::parse_or(ln, &toks[..op])?;
-            let right = Self::parse_and(ln, &toks[op + 1..])?;
+            let left = self.parse_or(ln, &toks[..op])?;
+            let right = self.parse_and(ln, &toks[op + 1..])?;
             return Ok(Cond::Or(Box::new(left), Box::new(right)));
         }
-        Self::parse_and(ln, toks)
+        self.parse_and(ln, toks)
     }
 
     /// Medium precedence: `and`. Left-associative.
-    fn parse_and(ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+    fn parse_and(&self, ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
         if let Some(op) = last_op_pos(toks, "and") {
-            let left = Self::parse_and(ln, &toks[..op])?;
-            let right = Self::parse_not(ln, &toks[op + 1..])?;
+            let left = self.parse_and(ln, &toks[..op])?;
+            let right = self.parse_not(ln, &toks[op + 1..])?;
             return Ok(Cond::And(Box::new(left), Box::new(right)));
         }
-        Self::parse_not(ln, toks)
+        self.parse_not(ln, toks)
     }
 
     /// Highest precedence: prefix `not`. Right-associative (naturally).
-    fn parse_not(ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+    fn parse_not(&self, ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
         if toks.first().map(|s| s.as_str()) == Some("not") {
             let rest = toks
                 .get(1..)
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| ParseError::at(ln, "'not' requires a condition"))?;
-            return Ok(Cond::Not(Box::new(Self::parse_not(ln, rest)?)));
+            return Ok(Cond::Not(Box::new(self.parse_not(ln, rest)?)));
         }
-        Self::parse_leaf(ln, toks)
+        self.parse_leaf(ln, toks)
     }
 
     /// Parse a leaf condition: `<type> <value>`.
-    fn parse_leaf(ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+    fn parse_leaf(&self, ln: usize, toks: &[String]) -> Result<Cond, ParseError> {
+        if toks.len() != 2 {
+            return Err(ParseError::at(ln, "condition requires exactly one value"));
+        }
         let kind = toks
             .first()
             .ok_or_else(|| ParseError::at(ln, "condition requires a type"))?;
         let val = tok_stripped(toks, 1, ln, &format!("{} requires a value", kind))?;
         match kind.as_str() {
-            "have" => Ok(Cond::Have(val)),
+            "have" if valid_command(&val) => Ok(Cond::Have(val)),
+            "have" => Err(ParseError::at(ln, "have requires one command token")),
             // `exists` takes a filesystem path — apply the same variable guard
             // and forward-slash normalisation used for path+/path-.
-            "exists" => Ok(Cond::Exists(resolve_path(&val, None))),
-            "env" => Ok(Cond::Env(val)),
+            "exists" => Ok(Cond::Exists(resolve_path(&val, self.base.as_deref()))),
+            "env" if valid_env_key(&val) => Ok(Cond::Env(val)),
+            "env" => Err(ParseError::at(ln, "env requires a shell variable name")),
             "os" => Ok(Cond::Os(val)),
             "shell" => Ok(Cond::Shell(val)),
             other => Err(ParseError::at(
@@ -323,7 +414,7 @@ impl Parser {
                         .get(1..)
                         .filter(|s| !s.is_empty())
                         .ok_or_else(|| ParseError::at(ln, "elif requires a condition"))?;
-                    let cond = Self::parse_cond(ln, cond_slice)?;
+                    let cond = self.parse_cond(ln, cond_slice)?;
                     self.pos += 1;
                     let b = self.block(&["elif", "else", "end"])?;
                     node.elifs.push((cond, b));
@@ -385,6 +476,20 @@ mod tests {
             Node::Set { val, .. } => assert_eq!(val, "hello world"),
             n => panic!("{:?}", n),
         }
+    }
+
+    #[test]
+    fn quoted_spaces_and_hashes_are_preserved() {
+        match parse_one("set GREETING \"hello world # users\" # comment") {
+            Node::Set { val, .. } => assert_eq!(val, "hello world # users"),
+            n => panic!("{:?}", n),
+        }
+    }
+
+    #[test]
+    fn unterminated_quotes_are_reported() {
+        let error = parse("set GREETING \"hello").expect_err("quote must fail");
+        assert!(error.msg.contains("unterminated quote"));
     }
 
     /// Outer double-quotes must be stripped; emitters will re-wrap the value.
@@ -795,10 +900,22 @@ mod tests {
     fn parse_leaf_exists_normalises_backslash() {
         match parse_one("if exists C:\\tools\\bin\nend") {
             Node::If(n) => match &n.cond {
-                Cond::Exists(p) => assert!(!p.contains('\\'), "backslash in: {}", p),
+                Cond::Exists(p) => assert_eq!(p, "C:/tools/bin"),
                 c => panic!("expected Exists, got {:?}", c),
             },
             n => panic!("{:?}", n),
+        }
+    }
+
+    #[test]
+    fn relative_exists_path_uses_source_base() {
+        let mut parser = Parser::new("if exists bin\nend", Some(PathBuf::from("/tmp/project")));
+        match parser.parse().expect("parse failed").as_slice() {
+            [Node::If(n)] => match &n.cond {
+                Cond::Exists(path) => assert_eq!(path, "/tmp/project/bin"),
+                other => panic!("expected Exists, got {:?}", other),
+            },
+            nodes => panic!("expected one if node, got {:?}", nodes),
         }
     }
 
@@ -952,6 +1069,12 @@ mod tests {
             }
             n => panic!("{:?}", n),
         }
+    }
+
+    #[test]
+    fn rejects_invalid_runtime_condition_tokens() {
+        assert!(parse("if have bad;cmd\nend").is_err());
+        assert!(parse("if env BAD-NAME\nend").is_err());
     }
 
     // ── strip_quotes unit tests ───────────────────────────────────────────────

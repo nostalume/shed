@@ -17,7 +17,7 @@ Design principle: maximum simplicity at every layer.
 
   - one input format, many output dialects
   - one binary, no runtime, no installer, no config files
-  - one straight pipe: source text -> tokens -> AST -> emitted text
+  - one straight pipe: source text -> tokens -> AST -> prune -> emitted text
 
 ---
 ## High-Level Data Flow
@@ -25,26 +25,28 @@ Design principle: maximum simplicity at every layer.
     stdin / file
          |
          v
-    [ Reader ] --> [ Parser ] --> [ Emitter ] --> stdout
-     raw String      Vec      String
-                    (the AST)
+    [ Reader ] --> [ Parser ] --> [ Pruner ] --> [ Emitter ] --> stdout
+     raw String      AST          AST             String
 
 Reader  -- trivial file or stdin read. No buffering; .shed files are tiny.
 Parser  -- converts raw text into a typed AST. Pure: no I/O, no global state.
+Pruner  -- folds shell/OS conditions for the binary target and simplifies
+           branches. Pure: no I/O, no global state.
 Emitter -- converts the AST into a target-language string. Pure: no I/O.
 
-Three stages. No optimisation pass, no symbol table, no linker.
+Four stages. No symbol table, no linker.
 
 ---
 
 ## Component Map
 
     src/
-      main.rs      CLI: parse args, call reader, call parser,
+      main.rs      CLI: parse args, read source, parse/prune,
                    dispatch to emitter, print result.
       ast.rs       Shared data types: Node, IfNode, Cond.
       parser.rs    Converts text -> Vec.
-                   Line-oriented tokenisation then recursive-descent.
+                   Quote-aware tokenisation, validation, and recursive descent.
+      prune.rs     Folds target shell/OS conditions.
       emit.rs      Emitter trait + sub-module declarations.
       emit/
         bash.rs    bash + zsh backend (POSIX-compatible)
@@ -54,12 +56,13 @@ Three stages. No optimisation pass, no symbol table, no linker.
 ---
 ## The AST
 
-The AST is deliberately flat and concrete. There is no generic expression
-node, no precedence hierarchy, no optional field hiding ambiguity.
+The statement AST is deliberately flat and concrete. Conditions use a small
+recursive tree so the parser can preserve the documented `not > and > or`
+precedence without introducing a generic expression node.
 
     Node
       Set   { key, val }     -- export an environment variable
-      Path  { dir, prepend } -- prepend or append to PATH
+      Path  { dir, direction } -- prepend or append to PATH
       Call  { cmd, args }    -- eval-style initialiser
       Alias { name, body }   -- shell alias
       If(IfNode)
@@ -71,6 +74,7 @@ node, no precedence hierarchy, no optional field hiding ambiguity.
     Cond
       Have(cmd)    -- command must exist on PATH (runtime)
       Exists(path) -- path must exist on filesystem (runtime)
+      Env(var)    -- environment variable is set and non-empty (runtime)
       Os(name)     -- darwin | linux | windows (compile-time fold)
       Shell(name)  -- bash | zsh | fish | pwsh (compile-time fold)
       Not(Cond)
@@ -80,18 +84,22 @@ node, no precedence hierarchy, no optional field hiding ambiguity.
 Nesting is supported through IfNode body / elifs / else_.
 The recursive block() call handles arbitrary depth naturally.
 
+`Call` and alias bodies deliberately preserve shell syntax for eval-init and
+alias use cases. They are trusted-input escape hatches, not data serializers.
+
 ---
 
 ## The Parser
 
 Two micro-phases:
 
-1. Pre-tokenisation -- split source into lines, strip comments, trim, split
-   on whitespace into Vec. Drop blank lines. No raw bytes after this.
+1. Pre-tokenisation -- split source into lines and run a small quote-aware
+   lexer. Whitespace inside quoted tokens is preserved; `#` starts a comment
+   only outside quotes. Drop blank lines and reject unterminated quotes.
 
 2. Recursive descent -- block(stops) consumes token-lines until a stop
-   keyword or EOF. parse_if handles branching. parse_cond maps two-token
-   syntax to a Cond variant.
+   keyword or EOF. parse_if handles branching. parse_cond applies the
+   `not > and > or` precedence rules before producing a Cond tree.
 
 Error messages carry enough context for the user to self-correct without
 reading source code.
@@ -152,6 +160,7 @@ src/
     bash.rs     — bash / zsh backend
     fish.rs     — fish backend
     pwsh.rs     — PowerShell backend
+  prune.rs      — compile-target condition pruning
 ```
 
 Do not let `main.rs` grow. If logic is needed beyond dispatching to an emitter,
@@ -280,7 +289,8 @@ All four emitter backends — each must handle every `Cond` variant.
 ## Semantic Pruning Pass
 
 The pruning pass runs after parsing and before emitting. It is pure: no I/O,
-no global state; the input AST and target shell name are the only inputs.
+no global state; the input AST, target shell, and optional target OS are the
+only inputs.
 
 ### Purpose
 
@@ -319,10 +329,12 @@ end
 `Cond::Have` and `Cond::Exists` are runtime checks that may differ per
 machine and are never folded.
 
-`Cond::Os` is now folded **at compile time** using Rust's `#[cfg(target_os)]`.
+`Cond::Os` is folded **at compile time** using Rust's `#[cfg(target_os)]`.
 For the three known names (`darwin`, `linux`, `windows`) the result is
-always-true or always-false depending on the build host. Unknown OS names
-stay as runtime checks.
+always-true or always-false depending on the Rust compilation target. Unknown
+OS names stay as runtime checks. The CLI can override this default with
+`--target-os darwin|linux|windows`, allowing one binary to generate output for
+another operating system without losing static pruning.
 
 ### Pruning rules for `Cond::Shell(name)`
 
@@ -333,7 +345,7 @@ stay as runtime checks.
 
 ### Pruning rules for `Cond::Os(name)`
 
-| Condition | Build host | Result |
+| Condition | Rust target | Result |
 |-----------|-----------|--------|
 | `Os("linux")` | linux | always-true → inline body |
 | `Os("darwin")` | macos | always-true → inline body |
@@ -371,8 +383,8 @@ After condition evaluation:
 
 ```
 src/
-  prune.rs    — prune_nodes(nodes, shell) -> Vec<Node>
-                prune_cond(cond, shell)   -> CondResult
+  prune.rs    — prune_nodes_for_target(nodes, shell, target_os) -> Vec<Node>
+                prune_cond(cond, shell, target_os)              -> CondResult
 ```
 
 `CondResult` is a local enum:
@@ -385,16 +397,14 @@ enum CondResult {
 }
 ```
 
-The pass is wired into `main.rs` between `resolve_paths` and `emit`:
+The pass is wired into `main.rs` after parsing and before emission:
 
 ```
-read → parse → resolve_paths → prune_nodes → emit
+read → parse (including path resolution) → prune_nodes_for_target → emit
 ```
 
-`prune_nodes` takes the target shell name as a `&str` so it remains pure
-and testable without constructing an `Emitter`.
-
-No other files need to change.
+`prune_nodes_for_target` takes the target shell and optional target OS as
+strings, so it remains pure and testable without constructing an `Emitter`.
 
 ---
 
@@ -467,13 +477,13 @@ Like `Have` and `Exists`, `Env` is always a runtime check; never folded.
 `path+` and `path-` emit an unconditional PATH mutation today, which means
 re-sourcing the shell config appends the same directory multiple times.
 
-The emitters wrap every `Path` node with an existence-then-duplicate guard:
+The emitters wrap every `Path` node with a delimiter-aware duplicate guard:
 
 | Shell | Guard |
 |-------|-------|
 | bash/zsh | `[[ ":$PATH:" != *":dir:"* ]] && export PATH="dir:$PATH"` |
 | fish | `fish_add_path` already deduplicates; no change needed |
-| pwsh | `if ("$env:PATH" -notlike "*;dir;*") { $env:PATH = "dir;$env:PATH" }` |
+| pwsh | `if (($env:PATH -split ';') -notcontains "dir") { $env:PATH = "dir;$env:PATH" }` |
 
 ---
 
@@ -555,56 +565,3 @@ shed: line 7: usage: set KEY VALUE
 ```
 
 ---
-
-## Proposed Improvement Plan
-
-Items below are not yet implemented.
-
----
-
-### P1 -- Variable interpolation in values
-
-Problem.
-  `set FOO $HOME/tool` emits the literal string $HOME/tool. Bash expands it
-  at eval time; fish and pwsh do not. Behaviour is silent and shell-dependent.
-
-Approach.
-  Represent a value as Vec<ValuePart> where ValuePart is Literal(String) or
-  Var(String). Parser splits $VAR tokens in value positions. Each emitter
-  renders Var(HOME) as $HOME (bash/zsh/fish) or $env:HOME (pwsh).
-
-Change surface.  ast.rs (new ValuePart type), parser.rs, all four emitters.
-
----
-
-### P2 -- zsh as a first-class backend
-
-Problem.
-  zsh is emitted by BashEmitter with shell_name set to "zsh". This works via
-  POSIX compatibility but precludes zsh-specific output and makes
-  Cond::Shell("zsh") indistinguishable from Cond::Shell("bash") inside the emitter.
-
-Approach.
-  Extract a ZshEmitter that composes BashEmitter for shared logic and overrides
-  only the parts that diverge (shell variable detection, typeset idioms).
-  Alternatively, add a PosixDialect enum parameter to BashEmitter.
-
-Change surface.  src/emit/bash.rs (refactor), optional new src/emit/zsh.rs,
-                 src/emit.rs, src/main.rs (match arm already present).
-
----
-
-### P3 -- Multi-line string values
-
-Problem.
-  A value like `set FZF_OPTS "--preview 'echo {}'\n  --bind 'ctrl-y:...'"`
-  spanning multiple source lines is not representable. The parser is
-  line-oriented; continuation lines are seen as new statements.
-
-Approach.
-  Support a trailing `\` line-continuation in the pre-tokenisation step of
-  `Parser::new`. Lines ending with `\` are joined with the following line
-  before splitting into tokens. No AST change required.
-
-Change surface.  `Parser::new` in `src/parser.rs` only. The AST and all
-                 emitters are unaffected.

@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO="lvyuemeng/shed"
+REPO="nostalume/shed"
 NIX_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shed.nix"
 
 # ── Resolve version ────────────────────────────────────────────────────────────

@@ -9,9 +9,9 @@ open-source ecosystem.
 ## 1. Local quality gate (run before every release)
 
 ```sh
-cargo fmt --check              # formatting
-cargo clippy -- -D warnings    # lints
-cargo test                     # all unit + integration tests
+cargo fmt --all -- --check       # formatting
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all --locked        # all unit + integration tests
 ```
 
 All three must pass with exit code 0. The CI workflow (`.github/workflows/ci.yml`)
@@ -19,46 +19,46 @@ runs the same three commands on every push and pull request to `main`.
 
 ---
 
-## 2. Version bump
+## 2. Synchronous versioned release
 
-Edit the `version` field in [`Cargo.toml`](../Cargo.toml):
-
-```toml
-[package]
-version = "0.2.0"
-```
-
-Commit, tag, and push:
+Do not edit `Cargo.toml`, commit, and tag separately. The release helpers update
+`Cargo.toml` and `Cargo.lock`, commit the version bump, create the matching
+annotated tag, and push both refs atomically:
 
 ```sh
-git commit -am "chore: release v0.2.0"
-git tag v0.2.0
-git push origin main --tags
+bash scripts/release.sh 0.1.6
+# Windows PowerShell:
+.\scripts\release.ps1 0.1.6
 ```
 
-The tag push triggers the GitHub Actions release workflow described below.
+The single version argument is applied to Cargo and reused for the Git tag;
+there is no second version to reconcile. Pushing the tag triggers the GitHub
+Actions release workflow.
 
 ---
 
 ## 3. GitHub Actions workflows
 
-Three workflows live in `.github/workflows/`:
+Four workflows live in `.github/workflows/`:
 
 ### `ci.yml` — Lint & Test
 
 Runs on every push to `main` and every pull request. Steps:
 
 1. `cargo fmt --all -- --check`
-2. `cargo clippy --all-targets -- -D warnings`
-3. `cargo test --all`
+2. `cargo clippy --all-targets --locked -- -D warnings`
+3. `cargo test --all --locked`
+4. Release-helper and generated Bash syntax validation (plus Fish/PowerShell
+   when installed)
 
-Uses `dtolnay/rust-toolchain@stable` and caches the cargo registry and build
-artefacts via `actions/cache@v5`.
+Uses `dtolnay/rust-toolchain@1.98.1` and caches the cargo registry and build
+artefacts via `actions/cache@v6`.
 
 ### `release.yml` — Cross-platform binary builds
 
-Triggered by a push to any `v*` tag. Builds a static binary for each matrix
-target, then publishes a GitHub Release with all binaries attached.
+Triggered by a push to any `v*` tag created by the release helper. It builds a
+static binary for each matrix target and publishes a GitHub Release with all
+binaries attached.
 
 | Target | Runner | Binary |
 |--------|--------|--------|
@@ -71,9 +71,10 @@ target, then publishes a GitHub Release with all binaries attached.
 Linux targets use musl for fully static binaries (no glibc dependency).
 The aarch64 Linux target requires `gcc-aarch64-linux-gnu` for the linker.
 
-The `release` job runs after all `build` jobs complete, downloads all
-artefacts, and creates the GitHub Release via `softprops/action-gh-release@v2`
-with `generate_release_notes: true`.
+Each build also publishes a `${artifact}.sha256` checksum beside its binary.
+The `release` job runs after all `build` jobs complete, downloads all artefacts,
+and creates the GitHub Release via `softprops/action-gh-release@v2` with
+`generate_release_notes: true`.
 
 ### `scoop-update.yml` — Scoop manifest update
 
@@ -92,6 +93,11 @@ without manual intervention.
 Dependabot is configured to check for GitHub Actions version updates weekly
 and open PRs with a `ci:` commit prefix.
 
+### `nix-update.yml` — Nix source refresh
+
+This scheduled workflow refreshes the pinned release version and hashes in
+`nix/shed.nix` after a new GitHub release.
+
 ---
 
 ## 4. Windows — Scoop
@@ -103,7 +109,7 @@ updated automatically by the `scoop-update.yml` workflow after each release.
 ### User installation
 
 ```powershell
-scoop bucket add shed https://github.com/lvyuemeng/shed
+scoop bucket add shed https://github.com/nostalume/shed
 scoop install shed/shed
 ```
 
@@ -115,16 +121,17 @@ The manifest uses `checkver` pointing at the GitHub releases API and
 ## 5. macOS & Linux — curl installer
 
 `install.sh` in the repo root detects the OS and architecture, downloads the
-correct binary from the GitHub release, and places it in `~/.local/bin`.
+correct binary plus its SHA-256 checksum, verifies the download, and places it
+in `~/.local/bin` (or `~/bin` as a fallback).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh
 ```
 
 To install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lvyuemeng/shed/main/install.sh | sh -s v0.2.0
+curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh -s v0.2.0
 ```
 
 ---
@@ -144,19 +151,19 @@ let
   version = "0.1.3";
   sources = {
     "x86_64-linux" = {
-      url    = "https://github.com/lvyuemeng/shed/releases/download/v${version}/shed-linux-x86_64";
+      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-x86_64";
       sha256 = lib.fakeSha256; # replace with actual hash after first fetch
     };
     "aarch64-linux" = {
-      url    = "https://github.com/lvyuemeng/shed/releases/download/v${version}/shed-linux-aarch64";
+      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-aarch64";
       sha256 = lib.fakeSha256;
     };
     "x86_64-darwin" = {
-      url    = "https://github.com/lvyuemeng/shed/releases/download/v${version}/shed-macos-x86_64";
+      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-x86_64";
       sha256 = lib.fakeSha256;
     };
     "aarch64-darwin" = {
-      url    = "https://github.com/lvyuemeng/shed/releases/download/v${version}/shed-macos-aarch64";
+      url    = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-aarch64";
       sha256 = lib.fakeSha256;
     };
   };
@@ -182,7 +189,7 @@ stdenv.mkDerivation {
 
   meta = with lib; {
     description = "Shell Environment Declaration — compile env.shed to bash, zsh, fish, or pwsh";
-    homepage    = "https://github.com/lvyuemeng/shed";
+    homepage    = "https://github.com/nostalume/shed";
     license     = licenses.mit;
     maintainers = [];
     platforms   = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
@@ -231,10 +238,10 @@ home.packages = [ (pkgs.callPackage ./nix/shed.nix {}) ];
 After updating the version, fetch each hash with:
 
 ```sh
-nix-prefetch-url https://github.com/lvyuemeng/shed/releases/download/v0.2.0/shed-linux-x86_64
-nix-prefetch-url https://github.com/lvyuemeng/shed/releases/download/v0.2.0/shed-linux-aarch64
-nix-prefetch-url https://github.com/lvyuemeng/shed/releases/download/v0.2.0/shed-macos-x86_64
-nix-prefetch-url https://github.com/lvyuemeng/shed/releases/download/v0.2.0/shed-macos-aarch64
+nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-linux-x86_64
+nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-linux-aarch64
+nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-macos-x86_64
+nix-prefetch-url https://github.com/nostalume/shed/releases/download/v0.2.0/shed-macos-aarch64
 ```
 
 Replace each `lib.fakeSha256` in the derivation with the output of the
@@ -246,7 +253,7 @@ corresponding command (a base32 hash string).
 
 | Manager | Path |
 |---------|------|
-| **Homebrew** | Submit a formula to `homebrew-core` or maintain a tap at `lvyuemeng/homebrew-shed` |
+| **Homebrew** | Submit a formula to `homebrew-core` or maintain a tap at `nostalume/homebrew-shed` |
 | **AUR** (Arch Linux) | Publish a `PKGBUILD` that downloads the musl binary or builds via `cargo` |
 | **nixpkgs** | Submit the derivation above to `nixpkgs` for inclusion in the official channel |
 | **Debian / Ubuntu .deb** | Use `cargo deb` to produce a `.deb` in CI and attach to the release |
@@ -269,12 +276,12 @@ Requires a `CARGO_REGISTRY_TOKEN` secret in GitHub Actions.
 ## 9. Release checklist
 
 ```
-[ ] cargo fmt --check passes
-[ ] cargo clippy -- -D warnings passes
-[ ] cargo test passes
-[ ] Cargo.toml version bumped
+[ ] cargo fmt --all -- --check passes
+[ ] cargo clippy --all-targets --locked -- -D warnings passes
+[ ] cargo test --all --locked passes
+[ ] `scripts/release.sh` or `scripts/release.ps1` updates Cargo + lockfile
+[ ] The release helper creates and atomically pushes `vX.Y.Z`
 [ ] CHANGELOG updated (optional)
-[ ] git tag vX.Y.Z pushed
 [ ] GitHub Actions release workflow completes (all 5 binaries attached)
 [ ] scoop-update.yml auto-commits updated shed.json
 [ ] Nix derivation version + sha256 hashes updated in nix/shed.nix

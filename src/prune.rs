@@ -1,8 +1,8 @@
 //! Semantic pruning pass -- eliminates statically unreachable `if` branches.
 //!
 //! Only `Cond::Shell(s)` is statically foldable: it is always-true when
-//! `s == shell` and always-false otherwise. `Cond::Have` and `Cond::Os`
-//! are runtime / multi-host checks and are never folded.
+//! `s == shell` and always-false otherwise. `Cond::Have`, `Cond::Exists`, and
+//! `Cond::Env` remain runtime checks; `Cond::Os` is folded for the Rust target.
 //!
 //! The pass is pure: no I/O, no global state. It runs after `resolve_paths`
 //! and before `emit`.
@@ -21,12 +21,19 @@ use crate::ast::{Cond, IfNode, Node};
 ///   sub-lists (`body`, elifs, `else_`).
 ///
 /// Non-`If` nodes pass through unchanged.
+#[cfg(test)]
 pub fn prune_nodes(nodes: Vec<Node>, shell: &str) -> Vec<Node> {
+    prune_nodes_for_target(nodes, shell, None)
+}
+
+/// Prune using an explicit output OS. `None` uses the binary's compilation
+/// target and preserves the conservative behavior for unknown native targets.
+pub fn prune_nodes_for_target(nodes: Vec<Node>, shell: &str, target_os: Option<&str>) -> Vec<Node> {
     // Worst case is identity (all nodes unknown); pre-size to len.
     let mut out = Vec::with_capacity(nodes.len());
     for n in nodes {
         match n {
-            Node::If(inode) => out.extend(prune_if(inode, shell)),
+            Node::If(inode) => out.extend(prune_if(inode, shell, target_os)),
             other => out.push(other),
         }
     }
@@ -47,7 +54,7 @@ enum CondResult {
 ///
 /// Compound conditions (`Not`, `And`, `Or`) are simplified by folding
 /// any statically-known sub-conditions first.
-fn prune_cond(cond: Cond, shell: &str) -> CondResult {
+fn prune_cond(cond: Cond, shell: &str, target_os: Option<&str>) -> CondResult {
     match cond {
         Cond::Shell(ref name) if name == shell => CondResult::AlwaysTrue,
         Cond::Shell(_) => CondResult::AlwaysFalse,
@@ -56,19 +63,25 @@ fn prune_cond(cond: Cond, shell: &str) -> CondResult {
         // If the os string matches the compile-target we know it is always-true;
         // if it is a *known* other OS string it is always-false.
         // Unknown OS names are kept as Unknown so the runtime check fires.
-        Cond::Os(ref name) => fold_os(name),
+        Cond::Os(ref name) => fold_os(name, target_os),
 
         // Have, Exists, and Env are runtime checks -- never folded.
         c @ (Cond::Have(_) | Cond::Exists(_) | Cond::Env(_)) => CondResult::Unknown(c),
 
-        Cond::Not(inner) => match prune_cond(*inner, shell) {
+        Cond::Not(inner) => match prune_cond(*inner, shell, target_os) {
             CondResult::AlwaysTrue => CondResult::AlwaysFalse,
             CondResult::AlwaysFalse => CondResult::AlwaysTrue,
             CondResult::Unknown(c) => CondResult::Unknown(Cond::Not(Box::new(c))),
         },
 
-        Cond::And(lhs, rhs) => fold_and(prune_cond(*lhs, shell), prune_cond(*rhs, shell)),
-        Cond::Or(lhs, rhs) => fold_or(prune_cond(*lhs, shell), prune_cond(*rhs, shell)),
+        Cond::And(lhs, rhs) => fold_and(
+            prune_cond(*lhs, shell, target_os),
+            prune_cond(*rhs, shell, target_os),
+        ),
+        Cond::Or(lhs, rhs) => fold_or(
+            prune_cond(*lhs, shell, target_os),
+            prune_cond(*rhs, shell, target_os),
+        ),
     }
 }
 
@@ -102,7 +115,7 @@ fn fold_or(l: CondResult, r: CondResult) -> CondResult {
 /// Any name matching the compile-time target is `AlwaysTrue`;
 /// any other *known* name is `AlwaysFalse`; unknown names stay `Unknown`
 /// (runtime check emitted).
-fn fold_os(name: &str) -> CondResult {
+fn fold_os(name: &str, target_os: Option<&str>) -> CondResult {
     // Chosen once at compile time; at most one branch is active.
     #[cfg(target_os = "macos")]
     const CURRENT_OS: &str = "darwin";
@@ -110,15 +123,16 @@ fn fold_os(name: &str) -> CondResult {
     const CURRENT_OS: &str = "linux";
     #[cfg(target_os = "windows")]
     const CURRENT_OS: &str = "windows";
-    // Fall-back for any other (FreeBSD, Haiku, …) build host.
+    // Fall-back for any other (FreeBSD, Haiku, …) compilation target.
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     const CURRENT_OS: &str = "";
 
     const KNOWN: &[&str] = &["darwin", "linux", "windows"];
 
-    if name == CURRENT_OS {
+    let current_os = target_os.or_else(|| (!CURRENT_OS.is_empty()).then_some(CURRENT_OS));
+    if current_os == Some(name) {
         CondResult::AlwaysTrue
-    } else if KNOWN.contains(&name) {
+    } else if current_os.is_some() && KNOWN.contains(&name) {
         CondResult::AlwaysFalse
     } else {
         CondResult::Unknown(Cond::Os(name.to_owned()))
@@ -126,24 +140,24 @@ fn fold_os(name: &str) -> CondResult {
 }
 
 /// Reduce an `IfNode` to a list of replacement nodes.
-fn prune_if(inode: IfNode, shell: &str) -> Vec<Node> {
+fn prune_if(inode: IfNode, shell: &str, target_os: Option<&str>) -> Vec<Node> {
     let IfNode {
         cond,
         body,
         elifs,
         else_,
     } = inode;
-    match prune_cond(cond, shell) {
-        CondResult::AlwaysTrue => prune_nodes(body, shell),
-        CondResult::AlwaysFalse => prune_false_head(elifs, else_, shell),
+    match prune_cond(cond, shell, target_os) {
+        CondResult::AlwaysTrue => prune_nodes_for_target(body, shell, target_os),
+        CondResult::AlwaysFalse => prune_false_head(elifs, else_, shell, target_os),
         CondResult::Unknown(kept) => vec![Node::If(IfNode {
             cond: kept,
-            body: prune_nodes(body, shell),
+            body: prune_nodes_for_target(body, shell, target_os),
             elifs: elifs
                 .into_iter()
-                .map(|(c, b)| (c, prune_nodes(b, shell)))
+                .map(|(c, b)| (c, prune_nodes_for_target(b, shell, target_os)))
                 .collect(),
-            else_: prune_nodes(else_, shell),
+            else_: prune_nodes_for_target(else_, shell, target_os),
         })],
     }
 }
@@ -155,23 +169,30 @@ fn prune_if(inode: IfNode, shell: &str) -> Vec<Node> {
 /// - unknown elif      -> rebuild a new if-node with this elif as the head,
 ///   remaining elifs preserved, original `else_` kept.
 /// - no elifs remain   -> inline `else_`.
-fn prune_false_head(elifs: Vec<(Cond, Vec<Node>)>, else_: Vec<Node>, shell: &str) -> Vec<Node> {
+fn prune_false_head(
+    elifs: Vec<(Cond, Vec<Node>)>,
+    else_: Vec<Node>,
+    shell: &str,
+    target_os: Option<&str>,
+) -> Vec<Node> {
     let mut elifs = elifs.into_iter().peekable();
     while let Some((elif_cond, elif_body)) = elifs.next() {
-        match prune_cond(elif_cond, shell) {
+        match prune_cond(elif_cond, shell, target_os) {
             CondResult::AlwaysFalse => continue,
-            CondResult::AlwaysTrue => return prune_nodes(elif_body, shell),
+            CondResult::AlwaysTrue => return prune_nodes_for_target(elif_body, shell, target_os),
             CondResult::Unknown(kept) => {
                 return vec![Node::If(IfNode {
                     cond: kept,
-                    body: prune_nodes(elif_body, shell),
-                    elifs: elifs.map(|(c, b)| (c, prune_nodes(b, shell))).collect(),
-                    else_: prune_nodes(else_, shell),
+                    body: prune_nodes_for_target(elif_body, shell, target_os),
+                    elifs: elifs
+                        .map(|(c, b)| (c, prune_nodes_for_target(b, shell, target_os)))
+                        .collect(),
+                    else_: prune_nodes_for_target(else_, shell, target_os),
                 })];
             }
         }
     }
-    prune_nodes(else_, shell)
+    prune_nodes_for_target(else_, shell, target_os)
 }
 
 // -- tests -------------------------------------------------------------------
@@ -437,7 +458,7 @@ mod tests {
 
     // -- Os static folding via #[cfg(target_os)] ---------------------------------
 
-    /// On a Linux build host, `os linux` folds to AlwaysTrue (body inlined),
+    /// On a Linux compilation target, `os linux` folds to AlwaysTrue (body inlined),
     /// `os darwin` and `os windows` fold to AlwaysFalse (dropped).
     /// This test is compiled on all platforms but asserts the correct result
     /// for the current compile target only.
@@ -521,6 +542,23 @@ mod tests {
                 out_win
             );
         }
+    }
+
+    #[test]
+    fn explicit_target_os_overrides_compilation_target() {
+        let linux = vec![Node::If(bare_if(
+            Cond::Os("linux".into()),
+            vec![set("LINUX")],
+        ))];
+        let windows = vec![Node::If(bare_if(
+            Cond::Os("windows".into()),
+            vec![set("WINDOWS")],
+        ))];
+
+        let linux_out = prune_nodes_for_target(linux, "bash", Some("linux"));
+        let windows_out = prune_nodes_for_target(windows, "bash", Some("linux"));
+        assert!(matches!(&linux_out[..], [Node::Set { key, .. }] if key == "LINUX"));
+        assert!(windows_out.is_empty());
     }
 
     /// Unknown OS names stay as Unknown (runtime check preserved).

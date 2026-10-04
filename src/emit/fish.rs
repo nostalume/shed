@@ -1,4 +1,4 @@
-use super::Emitter;
+use super::{Emitter, escape_double_quoted, escape_path};
 use crate::ast::{Cond, IfNode, Node, PathDir};
 use crate::emit::bash::os_uname_name;
 
@@ -23,7 +23,10 @@ impl FishEmitter {
     fn node(&self, n: &Node, d: usize, out: &mut Vec<String>) {
         match n {
             Node::Set { key, val } => {
-                out.push(self.indent(format!("set -gx {} \"{}\"", key, val), d));
+                out.push(self.indent(
+                    format!("set -gx {} \"{}\"", key, escape_double_quoted(val, "fish")),
+                    d,
+                ));
             }
 
             // `fish_add_path` deduplicates automatically — no double-PATH problem.
@@ -32,7 +35,10 @@ impl FishEmitter {
                     PathDir::Prepend => "-gP",
                     PathDir::Append => "-gaP",
                 };
-                out.push(self.indent(format!("fish_add_path {} \"{}\"", flag, dir), d));
+                out.push(self.indent(
+                    format!("fish_add_path {} \"{}\"", flag, escape_path(dir, "fish")),
+                    d,
+                ));
             }
 
             Node::Call { cmd, args } => {
@@ -51,7 +57,7 @@ impl FishEmitter {
     fn cond(&self, c: &Cond) -> String {
         match c {
             Cond::Have(cmd) => format!("type -q {}", cmd),
-            Cond::Exists(path) => format!("test -e \"{}\"", path),
+            Cond::Exists(path) => format!("test -e \"{}\"", escape_path(path, "fish")),
             Cond::Env(var) => format!("set -q {}", var),
             Cond::Os(name) => format!("test (uname -s) = \"{}\"", os_uname_name(name)),
             Cond::Shell(name) => {

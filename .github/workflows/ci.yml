@@ -15,28 +15,65 @@ jobs:
     name: Lint & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.1 toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo registry + build artefacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-rust-1.98.1-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-rust-1.98.1-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Tests
-        run: cargo test --all
+        run: cargo test --all --locked
+
+      - name: Validate generated Bash syntax
+        shell: bash
+        run: |
+          bash -n scripts/release.sh
+          output="$(printf '%s\n' \
+            'set EDITOR nvim' \
+            'path+ ~/.cargo/bin' \
+            'if have cargo' \
+            '  alias c cargo' \
+            'end' | cargo run --quiet -- bash)"
+          bash -n <<< "$output"
+
+      - name: Validate generated Fish syntax
+        shell: bash
+        run: |
+          if command -v fish >/dev/null 2>&1; then
+            printf '%s\n' 'set EDITOR nvim' 'path+ ~/.cargo/bin' \
+              | cargo run --quiet -- fish > /tmp/shed.fish
+            fish --no-execute /tmp/shed.fish
+          else
+            echo "fish is not installed; skipping syntax check"
+          fi
+
+      - name: Validate generated PowerShell syntax
+        shell: bash
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command \
+              '$errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/release.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Out-Host; exit 1 }'
+            printf '%s\n' 'set EDITOR nvim' 'path+ $env:USERPROFILE/tools' \
+              | cargo run --quiet -- pwsh > /tmp/shed.ps1
+            pwsh -NoProfile -Command \
+              '$null=$null; [System.Management.Automation.Language.Parser]::ParseFile("/tmp/shed.ps1", [ref]$null, [ref]$null) | Out-Null'
+          else
+            echo "pwsh is not installed; skipping syntax check"
+          fi

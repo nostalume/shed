@@ -15,15 +15,21 @@ use std::{
 use ast::Node;
 use emit::{Emitter, bash::BashEmitter, fish::FishEmitter, pwsh::PwshEmitter};
 use parser::Parser;
-use prune::prune_nodes;
+use prune::prune_nodes_for_target;
 
 const USAGE: &str = "\
 shed — Shell Environment Declaration
 compile a single env.shed to any shell dialect
 
 USAGE
-  shed <shell> [file]    compile (reads stdin when file is omitted)
-  shed check  [file]     parse only — reports errors or 'ok'
+  shed [--target-os OS] <shell> [file]
+                           compile (reads stdin when file is omitted)
+  shed [--target-os OS] check [file]
+                           parse only — reports errors or 'ok'
+
+OPTIONS
+  --target-os OS          fold `if os` for darwin, linux, or windows
+                           (defaults to the compiled binary's target)
 
 SHELLS
   bash   zsh   fish   pwsh
@@ -124,8 +130,51 @@ fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let shell = args.get(1).map(String::as_str).ok_or(USAGE)?;
-    let file = args.get(2).map(String::as_str);
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("shed {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let mut index = 1;
+    let mut target_os = None;
+    if let Some(arg) = args.get(index) {
+        if arg == "--target-os" {
+            target_os = Some(
+                args.get(index + 1)
+                    .ok_or_else(|| format!("--target-os requires a value\n\n{}", USAGE))?
+                    .clone(),
+            );
+            index += 2;
+        } else if let Some(value) = arg.strip_prefix("--target-os=") {
+            if value.is_empty() {
+                return Err(format!("--target-os requires a value\n\n{}", USAGE));
+            }
+            target_os = Some(value.to_owned());
+            index += 1;
+        }
+    }
+
+    if let Some(os) = target_os.as_deref() {
+        if !matches!(os, "darwin" | "linux" | "windows") {
+            return Err(format!(
+                "unknown target OS {:?} — choose: darwin, linux, windows",
+                os
+            ));
+        }
+    }
+
+    let shell = args
+        .get(index)
+        .map(String::as_str)
+        .ok_or_else(|| USAGE.to_owned())?;
+    if args.len() > index + 2 {
+        return Err(format!(
+            "unexpected argument {:?}\n\n{}",
+            args[index + 2],
+            USAGE
+        ));
+    }
+    let file = args.get(index + 1).map(String::as_str);
     let base = base_dir(file);
 
     // Parse and resolve paths in one step: Parser::new takes the base dir so
@@ -138,7 +187,7 @@ fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let ast = prune_nodes(parsed, shell);
+    let ast = prune_nodes_for_target(parsed, shell, target_os.as_deref());
 
     emit(shell, &ast).map(|out| println!("{}", out))
 }

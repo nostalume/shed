@@ -4,6 +4,53 @@ pub mod pwsh;
 
 use crate::ast::Node;
 
+/// Escape data placed inside a target shell's double-quoted string.
+///
+/// `$` is intentionally preserved so documented shell variables such as
+/// `$HOME` and `$env:USERPROFILE` continue to expand at runtime. Quotes,
+/// backslashes, and backticks are escaped to prevent the value from breaking
+/// out of the generated string.
+pub(crate) fn escape_double_quoted(value: &str, shell: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match (shell, ch) {
+            ("pwsh", '`') => out.push_str("``"),
+            ("pwsh", '"') => out.push_str("`\""),
+            (_, '\\') if shell != "pwsh" => out.push_str("\\\\"),
+            (_, '"') => out.push_str("\\\""),
+            (_, '`') => out.push_str("\\`"),
+            (_, '\r') => out.push_str("\\r"),
+            (_, '\n') => out.push_str("\\n"),
+            (_, c) => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render a home-relative path using the target shell's environment variable.
+pub(crate) fn render_path(dir: &str, shell: &str) -> String {
+    match dir.strip_prefix('~') {
+        Some(rest) => match shell {
+            "pwsh" => format!("$env:USERPROFILE{}", rest),
+            _ => format!("$HOME{}", rest),
+        },
+        None => dir.to_owned(),
+    }
+}
+
+pub(crate) fn escape_path(dir: &str, shell: &str) -> String {
+    let rendered = render_path(dir, shell);
+    let prefix = match shell {
+        "pwsh" => "$env:USERPROFILE",
+        _ => "$HOME",
+    };
+    if let Some(rest) = rendered.strip_prefix(prefix) {
+        format!("{}{}", prefix, escape_double_quoted(rest, shell))
+    } else {
+        escape_double_quoted(&rendered, shell)
+    }
+}
+
 /// Return `s` prefixed by `depth * 2` spaces.
 ///
 /// Identity law:  `indent(s, 0) == s`

@@ -1,4 +1,4 @@
-use super::Emitter;
+use super::{Emitter, escape_double_quoted, escape_path};
 use crate::ast::{Cond, IfNode, Node, PathDir};
 
 pub struct PwshEmitter;
@@ -33,16 +33,25 @@ impl PwshEmitter {
     fn node(&self, n: &Node, d: usize, out: &mut Vec<String>) {
         match n {
             Node::Set { key, val } => {
-                out.push(self.indent(format!("$env:{} = \"{}\"", key, val), d));
+                out.push(self.indent(
+                    format!("$env:{} = \"{}\"", key, escape_double_quoted(val, "pwsh")),
+                    d,
+                ));
             }
 
             Node::Path { dir, direction } => {
                 // Build the guard directly — no intermediate binding needed.
                 let add = match direction {
-                    PathDir::Prepend => format!("$env:PATH = \"{};$env:PATH\"", dir),
-                    PathDir::Append => format!("$env:PATH = \"$env:PATH;{}\"", dir),
+                    PathDir::Prepend => {
+                        format!("$env:PATH = \"{};$env:PATH\"", escape_path(dir, "pwsh"))
+                    }
+                    PathDir::Append => {
+                        format!("$env:PATH = \"$env:PATH;{}\"", escape_path(dir, "pwsh"))
+                    }
                 };
-                let guard = format!("if ($env:PATH -notlike '*{dir}*') {{ {add} }}");
+                let needle = escape_path(dir, "pwsh");
+                let guard =
+                    format!("if (($env:PATH -split ';') -notcontains \"{needle}\") {{ {add} }}");
                 out.push(self.indent(guard, d));
             }
 
@@ -70,7 +79,7 @@ impl PwshEmitter {
     fn cond(&self, c: &Cond) -> String {
         match c {
             Cond::Have(cmd) => format!("Get-Command {} -ErrorAction SilentlyContinue", cmd),
-            Cond::Exists(path) => format!("Test-Path \"{}\"", path),
+            Cond::Exists(path) => format!("Test-Path \"{}\"", escape_path(path, "pwsh")),
             Cond::Env(var) => format!("(Test-Path env:{})", var),
             Cond::Os(name) => match name.as_str() {
                 "darwin" => "$IsMacOS".into(),
@@ -184,7 +193,7 @@ mod tests {
             "add: {}",
             out
         );
-        assert!(out.contains("-notlike"), "guard: {}", out);
+        assert!(out.contains("-notcontains"), "guard: {}", out);
     }
 
     #[test]
@@ -198,7 +207,7 @@ mod tests {
             "add: {}",
             out
         );
-        assert!(out.contains("-notlike"), "guard: {}", out);
+        assert!(out.contains("-notcontains"), "guard: {}", out);
     }
 
     /// resolve_path normalises separators; forward slashes must survive into emitted output.

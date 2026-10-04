@@ -1,4 +1,4 @@
-use super::Emitter;
+use super::{Emitter, escape_double_quoted, escape_path};
 use crate::ast::{Cond, IfNode, Node, PathDir};
 
 /// Emits POSIX-compatible sh/bash/zsh.
@@ -45,19 +45,25 @@ impl BashEmitter {
     fn node(&self, n: &Node, d: usize, out: &mut Vec<String>) {
         match n {
             Node::Set { key, val } => {
-                out.push(self.indent(format!("export {}=\"{}\"", key, val), d));
+                out.push(self.indent(
+                    format!("export {}=\"{}\"", key, escape_double_quoted(val, "bash")),
+                    d,
+                ));
             }
 
             Node::Path { dir, direction } => {
                 // Build the guard directly — no intermediate `add` binding needed.
+                let rendered = escape_path(dir, "bash");
                 let guard = match direction {
                     PathDir::Prepend => format!(
-                        "[[ \"${{PATH}}\" != *\"{}\"* ]] && export PATH=\"{}:$PATH\"",
-                        dir, dir
+                        "[[ \":${{PATH}}:\" != *\":{}:\"* ]] && export PATH=\"{}:$PATH\"",
+                        rendered.as_str(),
+                        rendered.as_str()
                     ),
                     PathDir::Append => format!(
-                        "[[ \"${{PATH}}\" != *\"{}\"* ]] && export PATH=\"$PATH:{}\"",
-                        dir, dir
+                        "[[ \":${{PATH}}:\" != *\":{}:\"* ]] && export PATH=\"$PATH:{}\"",
+                        rendered.as_str(),
+                        rendered.as_str()
                     ),
                 };
                 out.push(self.indent(guard, d));
@@ -83,7 +89,7 @@ impl BashEmitter {
     fn cond(&self, c: &Cond) -> String {
         match c {
             Cond::Have(cmd) => format!("command -v {} >/dev/null 2>&1", cmd),
-            Cond::Exists(path) => format!("[ -e \"{}\" ]", path),
+            Cond::Exists(path) => format!("[ -e \"{}\" ]", escape_path(path, "bash")),
             Cond::Env(var) => format!("[ -n \"${{{var}:-}}\" ]"),
             Cond::Os(name) => format!("[ \"$(uname -s)\" = \"{}\" ]", os_uname_name(name)),
             Cond::Shell(name) => match name.as_str() {
