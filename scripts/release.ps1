@@ -42,7 +42,7 @@ $lockPath = Join-Path (Get-Location) 'Cargo.lock'
 $lock = Get-Content -Raw $lockPath
 $updated = [regex]::Replace(
     $lock,
-    '(?ms)(\[\[package\]\][ \t]*\nname = "shed"[ \t]*\nversion = ")[^"]+("[ \t]*)',
+    '(?ms)(\[\[package\]\][ \t]*\r?\nname = "shed"[ \t]*\r?\nversion = ")[^"]+("[ \t]*)',
     { param($m) $m.Groups[1].Value + $Version + $m.Groups[2].Value },
     1
 )

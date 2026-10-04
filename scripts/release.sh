@@ -47,7 +47,7 @@ cargo.write_text(updated)
 lock = Path("Cargo.lock")
 text = lock.read_text()
 updated, count = re.subn(
-    r'(?ms)(\[\[package\]\][ \t]*\nname = "shed"[ \t]*\nversion = ")[^"]+("[ \t]*)',
+    r'(?ms)(\[\[package\]\][ \t]*\r?\nname = "shed"[ \t]*\r?\nversion = ")[^"]+("[ \t]*)',
     rf'\g<1>{version}\g<2>',
     text,
     count=1,
