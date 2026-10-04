@@ -18,7 +18,7 @@ if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "release version must be MAJOR.MINOR.PATCH"
 }
 
-if ((git status --porcelain) -ne '') {
+if (git status --porcelain) {
     throw "release requires a clean working tree"
 }
 
