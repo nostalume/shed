@@ -46,6 +46,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends zsh fish
+          mkdir -p "$RUNNER_TEMP/fish"
+          curl --fail --location --silent --show-error \
+            https://github.com/fish-shell/fish-shell/releases/download/4.9.3/fish-4.9.3-linux-x86_64.tar.xz \
+            -o "$RUNNER_TEMP/fish.tar.xz"
+          echo "8f643d10ad1abb0ef7072764c01ceb5cf61b2d373fda400cf60f0bad69b7e095  $RUNNER_TEMP/fish.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/fish.tar.xz" -C "$RUNNER_TEMP/fish" fish
+          echo "$RUNNER_TEMP/fish" >> "$GITHUB_PATH"
       - name: Install Darwin test shells
         if: runner.os == 'macOS'
         run: |

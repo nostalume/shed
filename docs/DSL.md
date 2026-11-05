@@ -403,6 +403,7 @@ contract.
 
 The PowerShell adapter requires 7.5+ for present-empty environment values.
 The Bash adapter requires 5.2+ and rejects older versions before DSL effects.
+The Fish adapter requires 4.9+; older versions are rejected before DSL effects.
 Darwin's system Bash 3.2 reads source streams using their initial file size;
 the implementation uses modern Bash rather than a separate legacy code-unit path.
 Ordinary literals use single quoting; Unicode single-quote characters use numeric

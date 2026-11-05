@@ -189,6 +189,7 @@ removed on normal success/failure; interruption can leave a `shed.*` capture in
 the target's temporary directory.
 
 Bash requires 5.2+; generated files reject older versions before DSL effects.
+Fish requires 4.9+; older versions do not preserve the adapter's capture ordering.
 On macOS, select a modern Bash explicitly: the system Bash 3.2 cannot reliably
 source process-substitution streams. CI acquires modern Bash only on its remote
 Darwin runner.

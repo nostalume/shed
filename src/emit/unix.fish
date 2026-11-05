@@ -1,16 +1,24 @@
 # Captures are NUL-framed (value, status) pairs, consumed by string split0.
 # No newline trimming/splitting and no named scratch variables are involved.
+if builtin string match -q -r '^([0-3]\.|4\.[0-8]\.)' -- "$version"
+    builtin printf '%s\n' 'shed: Fish 4.9+ required' >&2
+    builtin return 1
+end
 function __shed_capture
-    if $argv
-        builtin printf '\000%s\000' 0
-    else
-        switch $status
-            case 1
-                builtin printf '\000%s\000' 1
-            case '*'
-                builtin printf '\000%s\000' 2
-        end
+    builtin set argv (__shed_collect $argv)
+    builtin set argv "$argv[1]" $status
+    switch "$argv[2]"
+        case 0
+            builtin printf '%s\000%s\000' "$argv[1]" 0
+        case 1
+            builtin printf '%s\000%s\000' "$argv[1]" 1
+        case '*'
+            builtin printf '%s\000%s\000' "$argv[1]" 2
     end
+end
+function __shed_collect
+    $argv | builtin string collect --allow-empty --no-trim-newlines
+    builtin return $pipestatus[1]
 end
 function __shed_system
     if builtin test -x /usr/bin/$argv[1]
