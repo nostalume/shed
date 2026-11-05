@@ -16,7 +16,7 @@ python3 -B -m unittest discover -s tests -p '*_test.py' -v
 ```
 
 Interpreter prerequisites and tested versions are in the
-[development plan](../plans/dsl-development.md). The Python packaging tools require
+[README](../README.md#compilation-status). The Python packaging tools require
 Python 3.9+. PowerShell release preparation requires PowerShell 7.5+.
 
 Start at the repository root, on `main`, with a clean working tree. Run one helper:

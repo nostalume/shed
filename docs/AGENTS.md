@@ -8,9 +8,8 @@ Keep each change directed at the requested result. Preserve unrelated user work
 and avoid speculative features or process. Choose implementation details from the
 current problem; do not treat past code structure as a permanent requirement.
 
-The [DSL specification](DSL.md) owns the approved next-language semantics.
-The [development plan](../plans/dsl-development.md) owns implementation sequencing
-and progress. The README describes the current interface and implementation limits.
+The [DSL specification](DSL.md) owns language semantics.
+The README describes the current interface and implementation limits.
 Do not present a planned capability as already implemented.
 
 Use evidence appropriate to the changed claim. Report completed checks, meaningful

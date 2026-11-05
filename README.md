@@ -6,11 +6,11 @@ A small compiler for shell environment declarations, with no third-party Rust
 dependencies. The development checkout implements the
 [next DSL](docs/DSL.md): source validation, conservative target specialization,
 and generation for PowerShell, Bash, Zsh, and Fish. CI has verified all nine
-declared shell/OS pairs across Linux, Darwin, and Windows. See the
-[tested versions and scope](plans/dsl-development.md#stage-6-the-declared-matrix-and-public-interface-agree).
+declared shell/OS pairs across Linux, Darwin, and Windows. See
+[compilation status](#compilation-status) for tested versions and scope.
 
-Published 0.1.6 binaries use the previous DSL. The examples below belong to the
-development checkout; build from source to use this language.
+The examples below use the DSL released in 0.2.0. Binaries from 0.1.6 and earlier
+use the previous DSL.
 
 ## Check a configuration
 
@@ -104,7 +104,7 @@ home.packages = [ (pkgs.callPackage ./nix/shed.nix {}) ];
 ```
 
 The derivation installs a versioned release binary; it does not build the current
-Rust source. See [release packaging](docs/RELEASE.md#nix-packaging).
+Rust source. See [release packaging](docs/RELEASE.md#scoop-and-nix-catalogs).
 
 ### macOS and Linux: installer
 
@@ -144,8 +144,11 @@ the pipeline and `$LASTEXITCODE`, and throw on nonzero native exit.
 
 PowerShell 7.6.9 passed on Windows, Linux and Darwin. Bash, Zsh and Fish passed on
 Linux and Darwin. Each Unix backend has separate 12,720-string scalar-codec and
-native-argument checks. See the [development stages](plans/dsl-development.md)
-for runtime versions, rejected values and the limits of this evidence.
+native-argument checks. The [0.2.0 release CI](https://github.com/nostalume/shed/actions/runs/41960711955)
+tested Bash 5.2.21 on Linux and 5.3.20 on Darwin, Zsh 5.9, and Fish 4.9.3.
+These checks cover the declared pairs at those versions, not every interpreter
+version, CPU architecture, or embedded shell program. Runtime adapter limits are
+documented in the [specification](docs/DSL.md#implementation-status).
 
 For Bash, compile to a file and source it after successful compilation:
 
@@ -196,15 +199,13 @@ Darwin runner.
 CI runs the complete suite on Linux and Darwin, and PowerShell on Windows.
 It records interpreter versions and checks Rust 1.85 separately with
 `cargo check --all-targets --locked`. Shells and the minimum Rust toolchain are
-acquired only on disposable hosted runners. Workflow configuration is separate
-from the observed results recorded in the development plan.
+acquired only on disposable hosted runners.
 The same CI builds all five release artifacts, verifies the Scoop/Nix updater and
 installs the Linux artifact through the Nix derivation on a disposable runner.
 Release helpers leave live package catalog versions/hashes intact until the new
 assets exist; one post-release update advances both catalogs together.
 
 - [DSL specification](docs/DSL.md): approved language semantics and current status.
-- [Development stages](plans/dsl-development.md): dependencies and acceptance evidence.
 - [Working agreements](docs/AGENTS.md): collaboration principles.
 - [Release guide](docs/RELEASE.md): build and distribution procedures.
 

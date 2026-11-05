@@ -8,8 +8,6 @@ pairs have passed real-interpreter CI under the adapter limits recorded below.
 Published 0.1.6
 binaries use the previous DSL. Compatibility with
 that DSL is not a requirement.
-The [development plan](../plans/dsl-development.md) owns implementation
-stages and completion evidence.
 
 ## Targets
 
@@ -398,8 +396,9 @@ ordered branches, and raw contents.
 There is no legacy parser or source-directory path anchoring. PowerShell generation
 implements every statement above. Bash, Zsh, and Fish also generate every statement.
 Real-interpreter CI has passed for all declared pairs, including the approved Fish
-representability errors. Exact runtime versions and scope are recorded in the
-development plan; this does not certify arbitrary shell versions or embedded code.
+representability errors. Tested versions and scope are recorded in the
+[README](../README.md#compilation-status); this does not certify arbitrary shell
+versions or embedded code.
 
 Unix ordered branches use sequential condition checks in a single-pass block.
 The first selected body leaves that block; otherwise the fallback runs. Every
@@ -484,9 +483,8 @@ Official documentation review covers Zsh's
 and Fish's [substitution boundaries](https://fishshell.com/docs/current/fish_for_bash_users.html),
 [assignment status and path variables](https://fishshell.com/docs/current/cmds/set.html),
 and [current-shell source scope](https://fishshell.com/docs/current/cmds/source.html).
-These rules support the adapter construction; the development plan records the
-separate execution evidence, including Fish PATH rejection, special-variable
-handling, source scope, and utility availability. Unix runtime
+These rules support the adapter construction. Real-shell tests cover Fish PATH
+rejection, special-variable handling, source scope, and utility availability. Unix runtime
 utilities are resolved in `/usr/bin`, then `/bin`, independently of DSL PATH.
 
 The frontend reports source-located capacity errors rather than overflowing the
@@ -494,7 +492,3 @@ main stack. Currently it permits 128 nested if-blocks and a budget of 128 condit
 leaves, unary/binary operators, and grouping openings per condition. These are
 compiler capacity limits, not additional language syntax. Raw payload contents
 do not consume condition or nesting capacity.
-
-Use the [development plan](../plans/dsl-development.md) for the current baseline,
-stage dependencies, acceptance conditions, and the first executable task. Keep
-progress there rather than changing the normative rules to match incomplete code.

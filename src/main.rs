@@ -26,7 +26,7 @@ OS names: linux, darwin, windows
 
 Requires PowerShell 7.5+, Bash 5.2+, or Fish 4.9+. Unix shells target Linux/Darwin.
 Fish rejects PATH values containing empty entries before mutation.
-See docs/DSL.md for the language and plans/dsl-development.md for progress.
+See docs/DSL.md for the language specification.
 ";
 
 fn read(file: Option<&str>) -> Result<String, String> {
