@@ -136,7 +136,13 @@ end
 function __shed_set
     builtin test "$argv[1]" != argv; or builtin return 2
     if builtin test "$argv[1]" = PATH
+        # Fish rewrites empty PATH entries to '.'. Reject before native mutation.
+        if builtin string match -q -r '(^$|^:|:$|::)' -- "$argv[2]"
+            builtin printf '%s\n' 'shed: Fish cannot preserve empty PATH entries' >&2
+            builtin return 2
+        end
         # No fish_add_path: nonexistent entries and exact old spellings survive.
+        builtin true
         builtin set -gx --path PATH (builtin string split ':' -- "$argv[2]") 2>/dev/null
     else
         # Assignment-mode set preserves the preceding status, including this

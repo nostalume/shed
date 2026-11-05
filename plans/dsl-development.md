@@ -449,7 +449,18 @@ observed coverage. Package metadata uses the canonical PowerShell name.
 
 Local Windows checks passed: 26 tests, six explicitly ignored Unix tests,
 Rustfmt, Clippy with warnings denied, and release build on Rust/Cargo 1.99.1.
-Remote execution and the minimum-Rust result have not yet been observed.
+The [first CI run](https://github.com/nostalume/shed/actions/runs/41942238703)
+passed Rust 1.85, the Unix codecs, Linux Bash/Zsh, and PowerShell on Unix. It
+exposed Fish's forced empty-PATH normalization and test assumptions about
+Darwin symlinks/Windows short paths. The user approved rejecting unrepresentable
+Fish PATH values before mutation, preserving the existing PATH and the common
+DSL rules. The adapter now has a preflight check and tests for all four empty-entry
+positions. Unix helper utilities use fixed system directories so older Bash
+cannot substitute `command -p`'s default PATH into environment queries.
+Test cwd expectations follow the actual provider/physical directory; executable
+selection checks compare canonical file identity. `.gitattributes` fixes shell
+scripts to LF, including Windows checkouts used through WSL. Final matrix rerun
+is pending; the first run is failure evidence, not full acceptance.
 
 ## Validation and execution boundaries
 

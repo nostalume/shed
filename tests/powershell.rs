@@ -195,7 +195,7 @@ Assert ($env:SHED_EXISTS -ceq 'yes') 'literal filesystem lookup'
 Assert $? 'empty branch returns success'
 {home}
 Assert ($env:SHED_HOME -ceq $HOME) 'home'
-$p = [IO.Path]::Join($env:SHED_TEST_ROOT, 'relative')
+$p = [IO.Path]::Join($ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath, 'relative')
 $delimiter = [IO.Path]::PathSeparator
 [Environment]::SetEnvironmentVariable('PATH','')
 {paths}
@@ -342,10 +342,14 @@ Assert $caught 'unrepresentable caller argument rejected'
 Assert (-not [IO.File]::Exists($env:SHED_NATIVE_MARKER)) 'invalid argv cannot launch'
 $env:PATH = "$env:SHED_TEST_ROOT/other"
 location
-Assert ([IO.File]::ReadAllText("$env:SHED_TEST_ROOT/location") -ceq [IO.Path]::GetFullPath("$env:SHED_TEST_ROOT/other/native_fixture{ext}")) 'fresh resolution after PATH change'
 "#));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+    assert_eq!(
+        fs::canonicalize(fs::read_to_string(session.root.join("location")).unwrap()).unwrap(),
+        fs::canonicalize(session.root.join(format!("other/native_fixture{ext}"))).unwrap(),
+        "fresh resolution after PATH change"
+    );
     assert_eq!(
         argv(session.root.join("argv")),
         [

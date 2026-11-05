@@ -5,7 +5,14 @@ __shed_capture() {
     else case $? in 1) \builtin printf 1;; *) \builtin printf 2;; esac
     fi
 }
-__shed_system() { \builtin command -p "$@"; }
+__shed_system() {
+    # Some older shells export command -p's search PATH to the utility itself.
+    if \builtin test -x "/usr/bin/$1"; then
+        \builtin command "/usr/bin/$1" "${@:2}"
+    else
+        \builtin command "/bin/$1" "${@:2}"
+    fi
+}
 __shed_env() {
     \builtin set -- "$(__shed_capture __shed_system printenv "$1" 2>/dev/null)"
     case "$1" in

@@ -182,9 +182,9 @@ Tests launch isolated interpreter sessions and compile a disposable native fixtu
 they do not load generated code into your development shell.
 
 The Unix adapters use `printenv`, `iconv`, `mktemp`, `cat`, `tr`,
-`cmp`, and `rm`. Bash/Zsh use the system utility search path; Fish currently
-looks in `/usr/bin` and `/bin`. The latter assumption and native special-variable
-behavior still require Zsh/Fish runtime validation. Init uses owned temporary files,
+`cmp`, and `rm`, resolved in `/usr/bin`, then `/bin`. Fish rejects PATH values
+containing empty entries before mutation because Fish would rewrite them to `.`;
+other shells retain exact empty entries. Init uses owned temporary files,
 removed on normal success/failure; interruption can leave a `shed.*` capture in
 the target's temporary directory.
 

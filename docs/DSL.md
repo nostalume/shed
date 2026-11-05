@@ -450,6 +450,13 @@ and checks executable files, bypassing functions, builtins, autoload, and hashes
 Native variable attributes that could reinterpret assigned data are rejected at
 runtime. The Fish adapter treats its intrinsic `argv` binding as an adapter error;
 it does not claim ordinary environment semantics for that native slot.
+Fish also rewrites empty PATH entries to `.` in its native variable machinery.
+The user-approved adapter boundary (2026-11-05) is to reject any PATH assignment
+containing an empty entry before mutation, including a present-empty PATH.
+The existing PATH and earlier DSL effects remain intact; later statements stop.
+The language's exact entry/spelling rules are unchanged for representable values
+and other backends. This limitation must not be hidden by normalization or a
+second environment store.
 
 Init captures bytes into a private temporary file, verifies successful exit and
 UTF-8/NUL constraints before emitting code, and sources the separate code stream
@@ -463,8 +470,9 @@ and Fish's [substitution boundaries](https://fishshell.com/docs/current/fish_for
 [assignment status and path variables](https://fishshell.com/docs/current/cmds/set.html),
 and [current-shell source scope](https://fishshell.com/docs/current/cmds/source.html).
 This supports the adapter construction, not a claim of executed conformance.
-Stage 6 must check the remaining real-runtime behavior, including Fish PATH,
-special-variable handling, source scope, and utility availability.
+Stage 6 checks the remaining real-runtime behavior, including Fish PATH rejection,
+special-variable handling, source scope, and utility availability. Unix runtime
+utilities are resolved in `/usr/bin`, then `/bin`, independently of DSL PATH.
 
 The frontend reports source-located capacity errors rather than overflowing the
 main stack. Currently it permits 128 nested if-blocks and a budget of 128 condition

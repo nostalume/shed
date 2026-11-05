@@ -21,6 +21,8 @@ impl Session {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(root.join("captures")).unwrap();
+        // Match the physical cwd used by Unix path operations (e.g. Darwin /var).
+        let root = fs::canonicalize(root).unwrap();
         let out = Command::new("rustc")
             .args([
                 "--edition=2024",
@@ -170,8 +172,9 @@ fn values_paths_queries_and_precedence(shell: &'static str) {
     let s = Session::new(shell);
     fs::write(s.root.join("[literal]"), "").unwrap();
     let value = "a '\"`$;|&<>[]*?#‘’‚‛🙂\r\n\t\\end\\";
+    let gap = if shell == "fish" { ":" } else { "::" };
     let mut source = format!(
-        "set VALUE {}\nset EMPTY ''\nunset GONE\nset COPY \"${{env:LOCAL_ONLY}}\"\nset SHELL \"${{shell}}\"\nset PATH \"old::${{env:ROOT}}/missing:OLD\"\npath+ missing\npath+ missing\npath- missing\npath- missing\nif have native_fixture and not have cd and not have 'native_*' and exists '[literal]' and not exists '*'\nset QUERIES yes\nend\n",
+        "set VALUE {}\nset EMPTY ''\nset GONE gone\nunset GONE\nset COPY \"${{env:LOCAL_ONLY}}\"\nset SHELL \"${{shell}}\"\nset PATH \"old{gap}${{env:ROOT}}/missing:OLD\"\npath+ missing\npath+ missing\npath- missing\npath- missing\nif have native_fixture and not have cd and not have 'native_*' and exists '[literal]' and not exists '*'\nset QUERIES yes\nend\n",
         quote(value)
     );
     let mut expected = vec![
@@ -180,7 +183,7 @@ fn values_paths_queries_and_precedence(shell: &'static str) {
         None,
         Some("".into()),
         Some(shell.into()),
-        Some(format!("old::OLD:{}/missing", s.root.display())),
+        Some(format!("old{gap}OLD:{}/missing", s.root.display())),
         Some("yes".into()),
     ];
     let mut names = vec!["VALUE", "EMPTY", "GONE", "COPY", "SHELL", "PATH", "QUERIES"];
@@ -203,6 +206,9 @@ fn values_paths_queries_and_precedence(shell: &'static str) {
         ("unset PATH", format!("{}/missing", s.root.display())),
         ("set PATH ''", format!("{}/missing:", s.root.display())),
     ] {
+        if shell == "fish" && start == "set PATH ''" {
+            continue; // Tested as an explicit representability error below.
+        }
         let (values, stderr) = s.run(&format!("{start}\npath+ missing\n"), true, "", &["PATH"]);
         assert_eq!(values, [Some(expected)], "{shell}");
         assert!(stderr.is_empty());
@@ -326,6 +332,25 @@ fn conformance(shell: &'static str) {
     structured_calls_and_code_unit_scope(shell);
     failures_propagate_without_evaluating_failed_output(shell);
     scalar_and_native_argument_roundtrip(shell);
+    if shell == "fish" {
+        let s = Session::new(shell);
+        for value in ["", ":old", "old:", "old::new"] {
+            let source = format!(
+                "set BEFORE kept\nset SAVED_PATH \"${{env:PATH}}\"\nset PATH {}\nset AFTER wrong\n",
+                quote(value)
+            );
+            let (values, stderr) = s.run(
+                &source,
+                false,
+                "",
+                &["BEFORE", "AFTER", "PATH", "SAVED_PATH"],
+            );
+            assert_eq!(values[0], Some("kept".into()));
+            assert_eq!(values[1], None);
+            assert_eq!(values[2], values[3], "rejected PATH must remain unchanged");
+            assert!(String::from_utf8_lossy(&stderr).contains("empty PATH"));
+        }
+    }
     if shell != "fish" {
         let s = Session::new(shell);
         let source = format!(
