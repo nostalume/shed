@@ -2,9 +2,17 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "codex/**"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,68 +20,82 @@ env:
 
 jobs:
   ci:
-    name: Lint & Test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            name: Lint & Shell Tests (Ubuntu)
+          - runner: windows-latest
+            name: PowerShell Tests (Windows)
+          - runner: macos-15
+            name: Shell Tests (Darwin)
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust 1.98.1 toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
           components: rustfmt, clippy
-
-      - name: Cache cargo registry + build artefacts
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-rust-1.98.1-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-rust-1.98.1-cargo-
-
+      - name: Install Linux test shells
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh fish
+      - name: Install Darwin test shell
+        if: runner.os == 'macOS'
+        run: brew install fish
+      - name: Record runtimes and require PowerShell 7.5+
+        shell: pwsh
+        run: |
+          rustc --version --verbose
+          cargo --version
+          if ($PSVersionTable.PSVersion -lt [version]'7.5') { throw 'PowerShell 7.5+ required' }
+          $PSVersionTable.PSVersion
+          if (-not $IsWindows) {
+            foreach ($shell in @('bash', 'zsh', 'fish')) {
+              & $shell --version
+              if ($LASTEXITCODE -ne 0) { throw "$shell unavailable" }
+            }
+          }
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
-
       - name: Clippy
+        if: runner.os == 'Linux'
         run: cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Tests
+      - name: Frontend, specialization, CLI, codecs, and real-shell tests
         run: cargo test --all --locked
-
-      - name: Validate generated Bash syntax
+      - name: Build release
+        run: cargo build --release --locked
+      - name: Check the DSL from file and stdin
+        shell: bash
+        run: |
+          cargo run --quiet --locked -- check examples/env.shed
+          cargo run --quiet --locked -- check < examples/env.shed
+      - name: Validate release-helper syntax
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           bash -n scripts/release.sh
-          output="$(printf '%s\n' \
-            'set EDITOR nvim' \
-            'path+ ~/.cargo/bin' \
-            'if have cargo' \
-            '  alias c cargo' \
-            'end' | cargo run --quiet -- bash)"
-          bash -n <<< "$output"
+          pwsh -NoProfile -Command \
+            '$errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/release.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Out-Host; exit 1 }'
 
-      - name: Validate generated Fish syntax
-        shell: bash
-        run: |
-          if command -v fish >/dev/null 2>&1; then
-            printf '%s\n' 'set EDITOR nvim' 'path+ ~/.cargo/bin' \
-              | cargo run --quiet -- fish > /tmp/shed.fish
-            fish --no-execute /tmp/shed.fish
-          else
-            echo "fish is not installed; skipping syntax check"
-          fi
-
-      - name: Validate generated PowerShell syntax
-        shell: bash
-        run: |
-          if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -Command \
-              '$errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/release.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Out-Host; exit 1 }'
-            printf '%s\n' 'set EDITOR nvim' 'path+ $env:USERPROFILE/tools' \
-              | cargo run --quiet -- pwsh > /tmp/shed.ps1
-            pwsh -NoProfile -Command \
-              '$null=$null; [System.Management.Automation.Language.Parser]::ParseFile("/tmp/shed.ps1", [ref]$null, [ref]$null) | Out-Null'
-          else
-            echo "pwsh is not installed; skipping syntax check"
-          fi
+  msrv:
+    name: Rust 1.85 minimum
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.85.0
+      - run: cargo check --all-targets --locked

@@ -1,201 +1,124 @@
-# Release & Publish Workflow
+# Release guide
 
-This document covers how to test, build, and distribute `shed` binaries across
-platforms. Everything here runs with tools that are standard in the Rust and
-open-source ecosystem.
+This guide describes the repository's current build and distribution paths.
+User installation commands are in the [README](../README.md).
 
----
+## Local checks
 
-## 1. Local quality gate (run before every release)
+Use the toolchain selected by [`rust-toolchain.toml`](../rust-toolchain.toml).
+Cargo is included with that toolchain.
 
 ```sh
-cargo fmt --all -- --check       # formatting
+cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
-cargo test --all --locked        # all unit + integration tests
+cargo test --all --locked
+cargo build --release --locked
 ```
 
-All three must pass with exit code 0. The CI workflow (`.github/workflows/ci.yml`)
-runs the same three commands on every push and pull request to `main`.
+All checks must succeed before releasing. The declared minimum Rust version in
+`Cargo.toml` is separate from the development pin.
 
----
+## Create a release
 
-## 2. Synchronous versioned release
-
-Do not edit `Cargo.toml`, commit, and tag separately. The release helpers update
-`Cargo.toml`, `Cargo.lock`, and the version field in `nix/shed.nix`, commit the
-version bump, create the matching annotated tag, and push both refs atomically:
+Start on `main` with a clean working tree. The Bash helper requires Python 3.
+After local checks, run one helper:
 
 ```sh
 bash scripts/release.sh 0.1.7
-# Windows PowerShell:
+```
+
+Or in PowerShell:
+
+```powershell
 .\scripts\release.ps1 0.1.7
 ```
 
-The single version argument is applied to Cargo and reused for the Git tag;
-there is no second version to reconcile. Pushing the tag triggers the GitHub
-Actions release workflow. The Nix hashes are refreshed afterward by
-`nix-update.yml`, once the release binaries exist.
+The helpers update `Cargo.toml`, `Cargo.lock`, and the version in `nix/shed.nix`;
+run `cargo check --locked`; commit the version change; create an annotated
+`vX.Y.Z` tag; and request an atomic push of the branch and tag. They do not run
+the full local checks above.
 
----
+This command publishes Git refs and triggers the release workflow. Check the
+command's result and the remote branch/tag before retrying after failure; a
+failed push can leave a local commit or tag. Nix hashes are refreshed later,
+after the new binaries exist.
 
-## 3. GitHub Actions workflows
+## GitHub Actions
 
-Four workflows live in `.github/workflows/`:
+| Configuration | Trigger | Responsibility |
+| --- | --- | --- |
+| `ci.yml` | Push to `main`, `master`, or `codex/**`; PR to `main`/`master`; manual | Full shell suite on Linux/Darwin, PowerShell on Windows, formatting/Clippy, CLI/examples, release builds and a separate Rust 1.85 compile check. |
+| `release.yml` | Push of a `v*` tag | Build five target binaries and publish a GitHub Release with checksums. |
+| `scoop-update.yml` | Successful Release workflow | Download the Windows binary and commit an updated `shed.json`. |
+| `nix-update.yml` | Successful Release workflow | Refresh binary hashes in `nix/shed.nix`, evaluate the flake, and commit the result. |
 
-### `ci.yml` — Lint & Test
+[`dependabot.yml`](../.github/dependabot.yml) is dependency-update configuration,
+not a workflow. It checks Cargo monthly and GitHub Actions weekly.
 
-Runs on every push to `main` and every pull request. Steps:
+CI and release builds pin the same toolchain as local development. CI requires
+PowerShell 7.5+ for real generated-script, scalar-codec, and native-argument tests;
+it fails when the interpreter is absent rather than silently skipping them.
+The checkout configures Ubuntu, Windows and Darwin jobs; local execution has verified
+Windows PowerShell and Linux Bash, not those remote job results. Ubuntu installs Zsh/Fish and runs
+the required Unix suite; it fails on missing shells. These configured jobs have
+not run for the Stage 6 revision yet. Zsh/Fish have official-documentation review;
+execution and minimum-Rust results are recorded in [Stage 6](../plans/dsl-development.md).
 
-1. `cargo fmt --all -- --check`
-2. `cargo clippy --all-targets --locked -- -D warnings`
-3. `cargo test --all --locked`
-4. Release-helper and generated Bash syntax validation (plus Fish/PowerShell
-   when installed)
+The two post-release update workflows push independently. Verify that both
+commits reach `main`; simultaneous updates can require resolving a failed push.
 
-Uses `dtolnay/rust-toolchain@1.98.1` and caches the cargo registry and build
-artefacts via `actions/cache@v6`.
+## Release artifacts
 
-### `release.yml` — Cross-platform binary builds
+| Rust target | Runner | Binary |
+| --- | --- | --- |
+| `x86_64-unknown-linux-musl` | Ubuntu | `shed-linux-x86_64` |
+| `aarch64-unknown-linux-musl` | Ubuntu | `shed-linux-aarch64` |
+| `x86_64-apple-darwin` | macOS | `shed-macos-x86_64` |
+| `aarch64-apple-darwin` | macOS | `shed-macos-aarch64` |
+| `x86_64-pc-windows-msvc` | Windows | `shed-windows-x86_64.exe` |
 
-Triggered by a push to any `v*` tag created by the release helper. It builds a
-static binary for each matrix target and publishes a GitHub Release with all
-binaries attached.
+The workflow uses musl for Linux and installs the required linkers. Every binary
+has a companion `.sha256` file. The installer verifies that checksum before
+placing the binary in the user's install directory.
 
-| Target | Runner | Binary |
-|--------|--------|--------|
-| `x86_64-unknown-linux-musl` | ubuntu-latest | `shed-linux-x86_64` |
-| `aarch64-unknown-linux-musl` | ubuntu-latest | `shed-linux-aarch64` |
-| `x86_64-apple-darwin` | macos-latest | `shed-macos-x86_64` |
-| `aarch64-apple-darwin` | macos-latest | `shed-macos-aarch64` |
-| `x86_64-pc-windows-msvc` | windows-latest | `shed-windows-x86_64.exe` |
+Scoop is updated by its post-release workflow. The current manifest's
+`autoupdate.url` contains a fixed version rather than a version placeholder;
+do not rely on that template alone to advance the download URL.
 
-Linux targets use musl for fully static binaries (no glibc dependency).
-The aarch64 Linux target requires `gcc-aarch64-linux-gnu` for the linker.
+## Nix packaging
 
-Each build also publishes a `${artifact}.sha256` checksum beside its binary.
-The `release` job runs after all `build` jobs complete, downloads all artefacts,
-and creates the GitHub Release via `softprops/action-gh-release@v2` with
-`generate_release_notes: true`.
+[`nix/shed.nix`](../nix/shed.nix) packages downloaded release binaries with
+per-platform SRI hashes. [`flake.nix`](../flake.nix) exposes that derivation for
+Linux and Darwin on x86_64/aarch64 as `shed` and the default package.
 
-### `scoop-update.yml` — Scoop manifest update
+The version and binary hashes must describe the same release. The release
+helper changes the version first; the post-release workflow later refreshes
+hashes. A checkout between those operations may not be installable with Nix.
 
-Runs automatically after `release.yml` completes successfully. It:
-
-1. Downloads the Windows binary from the new release.
-2. Computes its SHA-256 hash.
-3. Patches `shed.json` (version, URL, hash) in-place with `sed`.
-4. Commits and pushes the updated manifest back to `main`.
-
-This keeps `shed.json` in the repo always in sync with the latest release
-without manual intervention.
-
-### `dependabot.yml`
-
-Dependabot is configured to check for GitHub Actions version updates weekly
-and open PRs with a `ci:` commit prefix.
-
-### `nix-update.yml` — Nix source refresh
-
-This scheduled workflow refreshes the pinned release version and hashes in
-`nix/shed.nix` after a new GitHub release.
-
----
-
-## 4. Windows — Scoop
-
-[Scoop](https://scoop.sh) installs CLI tools from JSON manifests without
-administrator rights. The manifest `shed.json` lives in the repo root and is
-updated automatically by the `scoop-update.yml` workflow after each release.
-
-### User installation
-
-```powershell
-scoop bucket add shed https://github.com/nostalume/shed
-scoop install shed/shed
-```
-
-The manifest uses `checkver` pointing at the GitHub releases API and
-`autoupdate` to derive the URL and hash for future versions automatically.
-
----
-
-## 5. macOS & Linux — curl installer
-
-`install.sh` in the repo root detects the OS and architecture, downloads the
-correct binary plus its SHA-256 checksum, verifies the download, and places it
-in `~/.local/bin` (or `~/bin` as a fallback).
+Manual hash refresh requires Nix, curl, sed, and a Bash with associative-array
+support:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh
+bash nix/update.sh 0.1.6
+nix flake check --no-build --no-write-lock-file
+nix build .#shed
 ```
 
-To install a specific version:
+The first command rewrites the derivation. Flake evaluation alone does not build
+or run the package. Confirm the installed binary as well:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nostalume/shed/main/install.sh | sh -s v0.2.0
+nix run . -- --version
 ```
 
----
+## Completion checklist
 
-## 6. Nix — binary derivation and flake
+- [ ] Local checks pass.
+- [ ] Remote package version and tag agree.
+- [ ] All five binaries and checksums are attached to the GitHub Release.
+- [ ] Scoop and Nix update commits reach `main`.
+- [ ] Nix version and all hashes match the release.
+- [ ] The installer and packaged binary report the expected version.
 
-The zero-dependency release binaries are packaged by the canonical
-[`nix/shed.nix`](../nix/shed.nix) derivation. The repository
-[`flake.nix`](../flake.nix) exposes it as both `shed` and the default package:
-
-```sh
-nix profile install github:nostalume/shed#shed
-nix run github:nostalume/shed -- --version
-```
-
-The derivation supports Linux and Darwin on x86_64 and aarch64. Nix verifies
-each downloaded release binary with its SRI hash; `nix/update.sh` refreshes the
-version and hashes after each GitHub release.
-
-For a non-flake installation, call the canonical derivation directly:
-
-```nix
-# home.nix
-home.packages = [ (pkgs.callPackage ./nix/shed.nix {}) ];
-```
-
----
-
-## 7. Other package managers (future)
-
-| Manager | Path |
-|---------|------|
-| **Homebrew** | Submit a formula to `homebrew-core` or maintain a tap at `nostalume/homebrew-shed` |
-| **AUR** (Arch Linux) | Publish a `PKGBUILD` that downloads the musl binary or builds via `cargo` |
-| **nixpkgs** | Submit the derivation above to `nixpkgs` for inclusion in the official channel |
-| **Debian / Ubuntu .deb** | Use `cargo deb` to produce a `.deb` in CI and attach to the release |
-
----
-
-## 8. crates.io publish (optional)
-
-If the parser or AST are ever exposed as a library:
-
-```sh
-cargo publish --dry-run   # verify the package before upload
-cargo publish             # upload to crates.io
-```
-
-Requires a `CARGO_REGISTRY_TOKEN` secret in GitHub Actions.
-
----
-
-## 9. Release checklist
-
-```
-[ ] cargo fmt --all -- --check passes
-[ ] cargo clippy --all-targets --locked -- -D warnings passes
-[ ] cargo test --all --locked passes
-[ ] `scripts/release.sh` or `scripts/release.ps1` updates Cargo + lockfile
-[ ] The release helper creates and atomically pushes `vX.Y.Z`
-[ ] CHANGELOG updated (optional)
-[ ] GitHub Actions release workflow completes (all 5 binaries attached)
-[ ] scoop-update.yml auto-commits updated shed.json
-[ ] Nix derivation version + sha256 hashes updated in nix/shed.nix
-[ ] install.sh tested with new version
-```
+Other package managers and crates.io publication are not part of the current
+automated release path.

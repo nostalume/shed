@@ -1,785 +1,317 @@
-//! Integration tests — full source → emitted-text round-trips.
-//!
-//! Philosophy (per AGENT.md):
-//!   - Test important, integrated behaviour: parse + emit together.
-//!   - One test per interesting scenario, not one test per function.
-//!   - Inline emitter unit-tests (cond, node, indent) live in the emitter
-//!     modules themselves and are not duplicated here.
+use crate::ast::{Cond, Location, Os, Part, PathDir, Shell, Statement, Target, Word};
+use crate::parser::parse;
 
-use crate::{
-    emit::{Emitter, bash::BashEmitter, fish::FishEmitter, pwsh::PwshEmitter},
-    parser::Parser,
-    prune::prune_nodes,
-};
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-fn bash(src: &str) -> String {
-    let ast = prune_nodes(Parser::new(src, None).parse().unwrap(), "bash");
-    BashEmitter::new("bash").render(&ast)
-}
-fn zsh(src: &str) -> String {
-    let ast = prune_nodes(Parser::new(src, None).parse().unwrap(), "zsh");
-    BashEmitter::new("zsh").render(&ast)
-}
-fn fish(src: &str) -> String {
-    let ast = prune_nodes(Parser::new(src, None).parse().unwrap(), "fish");
-    FishEmitter.render(&ast)
-}
-fn pwsh(src: &str) -> String {
-    let ast = prune_nodes(Parser::new(src, None).parse().unwrap(), "pwsh");
-    PwshEmitter.render(&ast)
-}
-
-// ── set / path / call across all shells ────────────────────────────────────
-
-/// set emits the correct shell-specific export for each target.
-#[test]
-fn set_all_shells() {
-    assert_eq!(bash("set EDITOR nvim"), "export EDITOR=\"nvim\"");
-    assert_eq!(fish("set EDITOR nvim"), "set -gx EDITOR \"nvim\"");
-    assert_eq!(pwsh("set EDITOR nvim"), "$env:EDITOR = \"nvim\"");
+fn literal(word: &Word) -> &str {
+    word.literal().expect("expected a literal word")
 }
 
 #[test]
-fn pwsh_set_preserves_literal_backslashes() {
-    assert_eq!(
-        pwsh(r#"set TOOL C:\tools\bin"#),
-        "$env:TOOL = \"C:\\tools\\bin\""
-    );
-}
-
-/// path+ / path- generate the correct PATH mutation per shell,
-/// wrapped in a deduplication guard (bash/pwsh) or natively deduplicating (fish).
-#[test]
-fn path_prepend_and_append() {
-    let b_prepend = bash("path+ /usr/local/bin");
-    assert!(
-        b_prepend.contains("export PATH=\"/usr/local/bin:$PATH\""),
-        "bash prepend add: {}",
-        b_prepend
-    );
-    assert!(
-        b_prepend.contains("[[ "),
-        "bash prepend guard: {}",
-        b_prepend
-    );
-
-    let b_append = bash("path- /opt/bin");
-    assert!(
-        b_append.contains("export PATH=\"$PATH:/opt/bin\""),
-        "bash append add: {}",
-        b_append
-    );
-    assert!(b_append.contains("[[ "), "bash append guard: {}", b_append);
-
-    // fish_add_path deduplicates natively -- no extra guard needed.
-    assert_eq!(
-        fish("path+ /usr/local/bin"),
-        "fish_add_path -gP \"/usr/local/bin\""
-    );
-    assert_eq!(fish("path- /opt/bin"), "fish_add_path -gaP \"/opt/bin\"");
-
-    let p_prepend = pwsh("path+ C:/tools");
-    assert!(
-        p_prepend.contains("$env:PATH = \"C:/tools;$env:PATH\""),
-        "pwsh prepend add: {}",
-        p_prepend
-    );
-    assert!(
-        p_prepend.contains("-notcontains"),
-        "pwsh prepend guard: {}",
-        p_prepend
-    );
-}
-
-/// call replaces {shell} with the actual shell name.
-#[test]
-fn call_shell_placeholder() {
-    assert_eq!(
-        bash("call starship init {shell}"),
-        "eval \"$(starship init bash)\""
-    );
-    assert_eq!(
-        zsh("call starship init {shell}"),
-        "eval \"$(starship init zsh)\""
-    );
-    assert_eq!(
-        fish("call starship init {shell}"),
-        "starship init fish | source"
-    );
-    assert_eq!(
-        pwsh("call starship init {shell}"),
-        "Invoke-Expression (& starship init powershell)"
-    );
-}
-
-// ── conditional guards ────────────────────────────────────────────────────────
-
-/// `if have` emits a command-existence check and the correct block structure.
-#[test]
-fn if_have_all_shells() {
-    let src = "if have cargo\npath+ $HOME/.cargo/bin\nend";
-
-    let b = bash(src);
-    assert!(b.contains("command -v cargo"), "bash: {}", b);
-    assert!(b.contains("export PATH"), "bash: {}", b);
-    assert!(b.contains("fi"), "bash: {}", b);
-
-    let f = fish(src);
-    assert!(f.contains("type -q cargo"), "fish: {}", f);
-    assert!(f.contains("fish_add_path"), "fish: {}", f);
-    assert!(f.contains("end"), "fish: {}", f);
-
-    let p = pwsh("if have cargo\npath+ C:\\cargo\\bin\nend");
-    assert!(p.contains("Get-Command cargo"), "pwsh: {}", p);
-    assert!(p.contains("$env:PATH"), "pwsh: {}", p);
-}
-
-/// `if os` with elif: on Linux the prune pass folds os statically,
-/// so branches that match the compile OS are inlined and others dropped.
-#[test]
-#[allow(unused_variables)]
-fn if_os_with_elif() {
-    let src = "if os darwin\nset BROWSER open\nelif os linux\nset BROWSER xdg-open\nend";
-
-    let b = bash(src);
-    // On Linux: darwin→false (dropped), linux→true (inlined), no if wrapper.
-    // On macOS: darwin→true (inlined), no if wrapper.
-    // On Windows / other: both stay as runtime checks.
-    #[cfg(target_os = "linux")]
-    {
-        assert!(
-            b.contains("export BROWSER=\"xdg-open\""),
-            "bash linux: {}",
-            b
-        );
-        assert!(!b.contains("if "), "bash linux: unexpected if: {}", b);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        assert!(b.contains("export BROWSER=\"open\""), "bash macos: {}", b);
-        assert!(!b.contains("if "), "bash macos: unexpected if: {}", b);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(b.contains("Darwin"), "bash: {}", b);
-        assert!(b.contains("Linux"), "bash: {}", b);
-        assert!(b.contains("elif"), "bash: {}", b);
-        assert!(b.contains("fi"), "bash: {}", b);
-    }
-
-    let f = fish("if os darwin\nset BROWSER open\nend");
-    #[cfg(target_os = "macos")]
-    assert!(f.contains("set -gx BROWSER"), "fish macos: {}", f);
-    #[cfg(not(target_os = "macos"))]
-    // darwin is false on non-mac → block dropped
-    assert!(
-        !f.contains("BROWSER"),
-        "fish non-mac: darwin block should be dropped: {}",
-        f
-    );
-
-    let p = pwsh("if os windows\nset SHELL_NAME pwsh\nend");
-    #[cfg(target_os = "windows")]
-    assert!(p.contains("$env:SHELL_NAME"), "pwsh windows: {}", p);
-    #[cfg(not(target_os = "windows"))]
-    assert!(
-        !p.contains("SHELL_NAME"),
-        "pwsh non-windows: windows block should be dropped: {}",
-        p
-    );
-}
-
-/// `if shell` — compile-time pruning applies for self-shell.
-/// When compiled for the matching shell the prune pass inlines the body;
-/// when compiled for a different shell the block is dropped entirely.
-#[test]
-fn if_shell_self_and_cross() {
-    // each shell compiled for itself: body is inlined, no if-wrapper remains
-    let b = bash("if shell bash\nset X 1\nend");
-    assert!(
-        b.contains("export X=\""),
-        "bash self: body not inlined: {}",
-        b
-    );
-    assert!(
-        !b.contains("if "),
-        "bash self: unexpected if-wrapper: {}",
-        b
-    );
-
-    let f = fish("if shell fish\nset X 1\nend");
-    assert!(
-        f.contains("set -gx X"),
-        "fish self: body not inlined: {}",
-        f
-    );
-    assert!(
-        !f.contains("if "),
-        "fish self: unexpected if-wrapper: {}",
-        f
-    );
-
-    let p = pwsh("if shell pwsh\nset X 1\nend");
-    assert!(p.contains("$env:X"), "pwsh self: body not inlined: {}", p);
-    assert!(
-        !p.contains("if ("),
-        "pwsh self: unexpected if-wrapper: {}",
-        p
-    );
-
-    // bash compiled for fish-shell: block is dropped (empty output)
-    let cross = bash("if shell fish\nset X 1\nend");
-    assert!(
-        cross.is_empty(),
-        "bash cross: expected empty, got: {}",
-        cross
-    );
-}
-
-/// else block is emitted correctly.
-/// Uses `have` (always runtime-unknown) so the if/else structure is always preserved.
-#[test]
-fn if_else_structure() {
-    let src = "if have git\nset A found\nelse\nset A absent\nend";
-    let b = bash(src);
-    assert!(b.contains("else"), "bash: {}", b);
-    assert!(b.contains("fi"), "bash: {}", b);
-    let f = fish(src);
-    assert!(f.contains("else"), "fish: {}", f);
-    assert!(f.contains("end"), "fish: {}", f);
-}
-
-// ── multi-node realistic source ───────────────────────────────────────────────
-
-/// Reflects the README example: set + os guard + have guards + call.
-/// Validates that all emitters produce the key fragments from a real-world input.
-/// Os branches are folded at compile time; we only assert the OS-independent parts here
-/// and use #[cfg] guards for the OS-specific assertions.
-#[test]
-fn readme_example() {
-    let src = "\
+fn declarations_keep_values_and_argument_boundaries() {
+    let source = r##"
 set EDITOR nvim
-if os darwin
-  set BROWSER open
-elif os linux
-  set BROWSER xdg-open
-end
-if have cargo
-  path+ $HOME/.cargo/bin
-end
-if have starship
-  call starship init {shell}
-end";
-
-    let b = bash(src);
-    assert!(b.contains("export EDITOR=\"nvim\""), "EDITOR: {}", b);
-    assert!(b.contains("command -v cargo"), "cargo: {}", b);
-    assert!(
-        b.contains("eval \"$(starship init bash)\""),
-        "starship: {}",
-        b
-    );
-    // Os branch: statically folded — assert the surviving branch per build OS
-    #[cfg(target_os = "linux")]
-    assert!(
-        b.contains("export BROWSER=\"xdg-open\""),
-        "bash linux BROWSER: {}",
-        b
-    );
-    #[cfg(target_os = "macos")]
-    assert!(
-        b.contains("export BROWSER=\"open\""),
-        "bash macos BROWSER: {}",
-        b
-    );
-
-    let f = fish(src);
-    assert!(f.contains("set -gx EDITOR"), "EDITOR: {}", f);
-    assert!(f.contains("type -q cargo"), "cargo: {}", f);
-    assert!(f.contains("starship init fish"), "starship: {}", f);
-    #[cfg(target_os = "linux")]
-    assert!(f.contains("set -gx BROWSER"), "fish linux BROWSER: {}", f);
-    #[cfg(target_os = "macos")]
-    assert!(f.contains("set -gx BROWSER"), "fish macos BROWSER: {}", f);
-
-    let p = pwsh(src);
-    assert!(p.contains("$env:EDITOR = \"nvim\""), "EDITOR: {}", p);
-    assert!(p.contains("Get-Command cargo"), "cargo: {}", p);
-    assert!(
-        p.contains("Invoke-Expression (& starship init powershell)"),
-        "starship: {}",
-        p
-    );
-    // Os branch for pwsh: statically folded too
-    #[cfg(target_os = "macos")]
-    assert!(
-        p.contains("$env:BROWSER = \"open\""),
-        "pwsh macos BROWSER: {}",
-        p
-    );
-    #[cfg(target_os = "linux")]
-    assert!(
-        p.contains("$env:BROWSER = \"xdg-open\""),
-        "pwsh linux BROWSER: {}",
-        p
-    );
-}
-
-// -- alias keyword ----------------------------------------------------------
-
-/// `alias` emits the correct shell-specific alias syntax for each target.
-#[test]
-fn alias_all_shells() {
-    assert_eq!(bash("alias ll ls -la"), "alias ll='ls -la'");
-    assert_eq!(zsh("alias ll ls -la"), "alias ll='ls -la'");
-    assert_eq!(fish("alias ll ls -la"), "alias ll ls -la");
+unset OLD
+path+ bin
+path- 'C:\tools\'
+alias gs = git status --short
+init tool "" --config="hello # users" "${env:FLAGS}"
+"##;
+    let nodes = parse(source).unwrap();
+    assert_eq!(nodes.len(), 6);
+    assert_eq!(nodes[0].at, Location { line: 2, column: 1 });
+    let Statement::Set { name, value } = &nodes[0].kind else {
+        panic!()
+    };
+    assert_eq!(name, "EDITOR");
+    assert_eq!(literal(value), "nvim");
+    assert!(matches!(&nodes[1].kind, Statement::Unset(name) if name == "OLD"));
+    let Statement::Path { value, direction } = &nodes[2].kind else {
+        panic!()
+    };
+    assert_eq!(*direction, PathDir::Prepend);
+    assert_eq!(literal(value), "bin"); // no compiler-directory anchoring
+    let Statement::Path { value, direction } = &nodes[3].kind else {
+        panic!()
+    };
+    assert_eq!(*direction, PathDir::Append);
+    assert_eq!(literal(value), "C:\\tools\\");
+    let Statement::Alias { name, command } = &nodes[4].kind else {
+        panic!()
+    };
+    assert_eq!(name, "gs");
+    assert_eq!(literal(&command.program), "git");
     assert_eq!(
-        pwsh("alias ll ls -la"),
-        "Set-Alias -Scope Global -Name ll -Value ls -la"
+        command.args.iter().map(literal).collect::<Vec<_>>(),
+        ["status", "--short"]
     );
+    let Statement::Init(command) = &nodes[5].kind else {
+        panic!()
+    };
+    assert_eq!(literal(&command.program), "tool");
+    assert_eq!(command.args.len(), 3);
+    assert_eq!(literal(&command.args[0]), "");
+    assert_eq!(literal(&command.args[1]), "--config=hello # users");
+    assert_eq!(command.args[2].parts, [Part::Env("FLAGS".into())]);
 }
 
-/// `alias` with a single-word body.
 #[test]
-fn alias_single_word_body() {
-    assert_eq!(bash("alias g git"), "alias g='git'");
-    assert_eq!(fish("alias g git"), "alias g git");
+fn words_preserve_expansion_types_and_literal_quotes() {
+    let nodes = parse(
+        r##"set VALUE pre' literal '"${env:ROOT}/${home}/${shell}"post
+set LITERAL '${env:OTHER}'
+set ESCAPED "\${env:OTHER}\n\r\t\\\""
+set EMPTY ""
+"##,
+    )
+    .unwrap();
+    let Statement::Set { value, .. } = &nodes[0].kind else {
+        panic!()
+    };
     assert_eq!(
-        pwsh("alias g git"),
-        "Set-Alias -Scope Global -Name g -Value git"
+        value.parts,
+        [
+            Part::Literal("pre literal ".into()),
+            Part::Env("ROOT".into()),
+            Part::Literal("/".into()),
+            Part::Home,
+            Part::Literal("/".into()),
+            Part::TargetShell,
+            Part::Literal("post".into()),
+        ]
+    );
+    let Statement::Set { value, .. } = &nodes[1].kind else {
+        panic!()
+    };
+    assert_eq!(literal(value), "${env:OTHER}");
+    let Statement::Set { value, .. } = &nodes[2].kind else {
+        panic!()
+    };
+    assert_eq!(literal(value), "${env:OTHER}\n\r\t\\\"");
+    let Statement::Set { value, .. } = &nodes[3].kind else {
+        panic!()
+    };
+    assert_eq!(literal(value), "");
+}
+
+#[test]
+fn comments_only_start_at_whitespace_boundaries() {
+    let nodes = parse(
+        r##"
+# ignored ' " ${unknown}
+set A abc#def # discarded "
+set B "hello # users"
+set C "x"#suffix
+set D ''#suffix
+"##,
+    )
+    .unwrap();
+    let values = nodes
+        .iter()
+        .map(|node| {
+            let Statement::Set { value, .. } = &node.kind else {
+                panic!()
+            };
+            literal(value)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(values, ["abc#def", "hello # users", "x#suffix", "#suffix"]);
+}
+
+#[test]
+fn precedence_grouping_and_operator_named_operands_are_structural() {
+    let nodes = parse("if have a or have b and not have c\nend\nif (have a or have b) and have or\nend\nif have a and have and and have b\nend").unwrap();
+    let Statement::If(first) = &nodes[0].kind else {
+        panic!()
+    };
+    let Cond::Or(_, right) = &first.branches[0].0 else {
+        panic!()
+    };
+    assert!(matches!(&**right, Cond::And(_, rhs) if matches!(&**rhs, Cond::Not(_))));
+    let Statement::If(second) = &nodes[1].kind else {
+        panic!()
+    };
+    let Cond::And(left, right) = &second.branches[0].0 else {
+        panic!()
+    };
+    assert!(matches!(&**left, Cond::Or(_, _)));
+    assert!(matches!(&**right, Cond::Have(word) if literal(word) == "or"));
+    let Statement::If(third) = &nodes[2].kind else {
+        panic!()
+    };
+    assert!(
+        matches!(&third.branches[0].0, Cond::And(lhs, _) if matches!(&**lhs, Cond::And(_, rhs) if matches!(&**rhs, Cond::Have(word) if literal(word) == "and")))
     );
 }
 
-/// missing `alias` body is a parse error.
 #[test]
-fn alias_missing_body_is_error() {
-    assert!(Parser::new("alias ll", None).parse().is_err());
-    assert!(Parser::new("alias", None).parse().is_err());
+fn branches_keep_order_empty_bodies_and_nested_statements() {
+    let nodes = parse("if false\nelif shell powershell\n if env ENABLED\n  set A yes\n else\n end\nelif os darwin\nelse\n unset A\nend").unwrap();
+    let Statement::If(branch) = &nodes[0].kind else {
+        panic!()
+    };
+    assert_eq!(branch.branches.len(), 3);
+    assert!(matches!(branch.branches[0].0, Cond::Constant(false)));
+    assert!(branch.branches[0].1.is_empty());
+    assert!(matches!(
+        branch.branches[1].0,
+        Cond::Shell(Shell::Powershell)
+    ));
+    assert!(matches!(branch.branches[2].0, Cond::Os(Os::Darwin)));
+    let Statement::If(inner) = &branch.branches[1].1[0].kind else {
+        panic!()
+    };
+    assert!(matches!(&inner.branches[0].0, Cond::Env(name) if name == "ENABLED"));
+    assert!(inner.otherwise.is_empty());
+    assert_eq!(branch.otherwise.len(), 1);
 }
 
-/// Errors carry the 1-based source line and the offending token.
 #[test]
-fn parse_errors_carry_line_and_context() {
-    let err = Parser::new("set A 1\nsett FOO bar", None)
-        .parse()
-        .unwrap_err();
-    assert_eq!(err.line, 2, "wrong line: {}", err);
-    assert!(err.msg.contains("sett"), "wrong msg: {}", err);
-
-    // Missing set value — points to the correct line
-    let err = Parser::new("set A 1\nset B 2\nset C", None)
-        .parse()
-        .unwrap_err();
-    assert_eq!(err.line, 3, "wrong line: {}", err);
-
-    // Unterminated if — points to the opening `if` line
-    let err = Parser::new("set A 1\nif have git\nset B 2", None)
-        .parse()
-        .unwrap_err();
-    assert_eq!(err.line, 2, "should point to if line: {}", err);
+fn raw_payload_is_opaque_and_preserves_original_line_endings() {
+    for newline in ["\n", "\r\n"] {
+        let body = format!(
+            "  # shell comment{newline}end{newline}' unfinished quote{newline}$HOME ${{unknown}}{newline}"
+        );
+        let source = format!(
+            "if false{newline}  raw  powershell <<CODE # comment{newline}{body}CODE{newline}end{newline}"
+        );
+        let nodes = parse(&source).unwrap();
+        let Statement::If(branch) = &nodes[0].kind else {
+            panic!()
+        };
+        let Statement::Raw {
+            shell,
+            body: actual,
+        } = &branch.branches[0].1[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!(*shell, Shell::Powershell);
+        assert_eq!(*actual, body);
+    }
+    let nodes = parse("raw bash <<END\nEND").unwrap();
+    assert!(matches!(&nodes[0].kind, Statement::Raw { body, .. } if body.is_empty()));
 }
 
-// ── compound conditions (not / and / or) ─────────────────────────────────────
-
-/// `if not have` — prefix negation across all shells.
 #[test]
-fn if_not_have_all_shells() {
-    let src = "if not have cargo\nset CARGO_ABSENT 1\nend";
-
-    let b = bash(src);
-    assert!(b.contains("! command -v cargo"), "bash: {}", b);
-    assert!(b.contains("fi"), "bash: {}", b);
-
-    let f = fish(src);
-    assert!(f.contains("not type -q cargo"), "fish: {}", f);
-    assert!(f.contains("end"), "fish: {}", f);
-
-    let p = pwsh(src);
-    assert!(p.contains("-not (Get-Command cargo"), "pwsh: {}", p);
-}
-
-/// `if have X and os Y` — infix `and` across all shells.
-/// On Linux: `os linux` folds to AlwaysTrue, so `have cargo AND true` reduces to
-/// just the `have cargo` guard (no `&&`, no `Linux` string in output).
-/// On macOS: `os linux` folds to AlwaysFalse → entire block dropped.
-/// On other / unknown OS: both runtime checks are preserved.
-#[test]
-#[allow(unused_variables)]
-fn if_and_condition_all_shells() {
-    let src = "if have cargo and os linux\npath+ $HOME/.cargo/bin\nend";
-
-    let b = bash(src);
-    // On Linux: os linux=true, And reduces to Have(cargo) only.
-    // On macOS: os linux=false, And is false → block dropped.
-    // On other: both kept as And(Have, Os).
-    #[cfg(target_os = "linux")]
-    {
-        assert!(b.contains("command -v cargo"), "bash and lhs: {}", b);
-        // os linux was folded out — the if-condition line has no && (the dedup guard
-        // inside the body has &&, but the if-line itself should not).
-        let if_line = b
-            .lines()
-            .find(|l| l.trim_start().starts_with("if "))
-            .unwrap_or("");
-        assert!(
-            !if_line.contains("&&"),
-            "bash linux: unexpected && in if-line: {}",
-            if_line
-        );
-        assert!(
-            !b.contains("Linux"),
-            "bash linux: unexpected Linux string: {}",
-            b
-        );
-    }
-    #[cfg(target_os = "macos")]
-    assert!(
-        b.is_empty() || !b.contains("cargo/bin"),
-        "bash macos: dropped: {}",
-        b
-    );
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(b.contains("command -v cargo"), "bash and lhs: {}", b);
-        assert!(b.contains("&&"), "bash and op: {}", b);
-        assert!(b.contains("Linux"), "bash and rhs: {}", b);
-    }
-
-    let f = fish(src);
-    #[cfg(target_os = "linux")]
-    {
-        assert!(f.contains("type -q cargo"), "fish and lhs: {}", f);
-        assert!(
-            !f.contains(";  and  "),
-            "fish linux: unexpected ;  and : {}",
-            f
-        );
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(f.contains("type -q cargo"), "fish and lhs: {}", f);
-        assert!(f.contains(";  and  "), "fish and op: {}", f);
-        assert!(f.contains("Linux"), "fish and rhs: {}", f);
-    }
-
-    let p = pwsh(src);
-    #[cfg(target_os = "linux")]
-    {
-        assert!(p.contains("Get-Command cargo"), "pwsh and lhs: {}", p);
-        assert!(!p.contains("-and"), "pwsh linux: unexpected -and: {}", p);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(p.contains("Get-Command cargo"), "pwsh and lhs: {}", p);
-        assert!(p.contains("-and"), "pwsh and op: {}", p);
-        assert!(p.contains("$IsLinux"), "pwsh and rhs: {}", p);
+fn malformed_or_incomplete_source_is_rejected_even_in_dead_branches() {
+    for source in [
+        "set A hello world",
+        "set 1BAD x",
+        "unset",
+        "unset A B",
+        "path+",
+        "path- one two",
+        "alias gs git status",
+        "alias -gs = git",
+        "alias gs =",
+        "init",
+        "set A $HOME",
+        "set A \"$(date)\"",
+        "set A \"\\q\"",
+        "set A \"${unknown}\"",
+        "set A \"${env:1BAD}\"",
+        "set A \"${home\"",
+        "set A \"unfinished",
+        "if true\nend garbage",
+        "if true\nelse garbage\nend",
+        "if true\nelse\nelse\nend",
+        "if true\nelse\nelif true\nend",
+        "if true",
+        "end",
+        "else",
+        "elif true",
+        "if (true\nend",
+        "if true)\nend",
+        "if (true)#not_a_comment\nend",
+        "if \"true\"\nend",
+        "if have a garbage\nend",
+        "if os plan9\nend",
+        "if shell pwsh\nend",
+        "if env \"bad key\"\nend",
+        "raw bash <<END\n END\n",
+        "raw bash <<END",
+        "raw other <<END\nEND",
+        "raw bash <<END extra\nEND",
+        "raw bash <<1BAD\n1BAD",
+        "if false\nunknown statement\nend",
+        "if false\nset A \"${unknown}\"\nend",
+        "if false\nraw other <<END\nEND\nend",
+        "init tool | source",
+        "set A '\0'",
+        "raw bash <<END\na\0b\nEND",
+    ] {
+        assert!(parse(source).is_err(), "unexpectedly accepted: {source:?}");
     }
 }
 
-/// `if or` — infix `or` across all shells.
-/// `os darwin or os linux` on Linux: darwin=false, linux=true → Or(false,true)=AlwaysTrue → body inlined.
-/// On macOS: darwin=true → Or(true,_)=AlwaysTrue → body inlined.
-/// On other: both runtime checks kept.
 #[test]
-#[allow(unused_variables)]
-fn if_or_condition_all_shells() {
-    let src = "if os darwin or os linux\nset POSIX 1\nend";
-
-    let b = bash(src);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        // Or folds to AlwaysTrue → body inlined
-        assert!(b.contains("export POSIX=\"1\""), "bash unix: {}", b);
-        assert!(!b.contains("if "), "bash unix: unexpected if: {}", b);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(b.contains("Darwin"), "bash or lhs: {}", b);
-        assert!(b.contains("||"), "bash or op: {}", b);
-        assert!(b.contains("Linux"), "bash or rhs: {}", b);
-    }
-
-    let f = fish(src);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        assert!(f.contains("set -gx POSIX"), "fish unix: {}", f);
-        assert!(!f.contains("if "), "fish unix: unexpected if: {}", f);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(f.contains("Darwin"), "fish or lhs: {}", f);
-        assert!(f.contains(";  or "), "fish or op: {}", f);
-        assert!(f.contains("Linux"), "fish or rhs: {}", f);
-    }
-
-    let p = pwsh(src);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        assert!(p.contains("$env:POSIX = \"1\""), "pwsh unix: {}", p);
-        assert!(!p.contains("if ("), "pwsh unix: unexpected if: {}", p);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        assert!(p.contains("$IsMacOS"), "pwsh or lhs: {}", p);
-        assert!(p.contains("-or"), "pwsh or op: {}", p);
-        assert!(p.contains("$IsLinux"), "pwsh or rhs: {}", p);
-    }
-}
-
-// -- semantic pruning (shell-condition folding) ----------------------------------
-
-/// Comprehensive single-shell pruning integration test (bash).
-///
-/// Covers in one source blob: self-shell inline, foreign-shell drop,
-/// dead-head+else, dead-head+matching-elif, not-fold, and+true, and+false,
-/// or+true, and unknown guard kept as-is.
-#[test]
-fn prune_comprehensive_bash() {
-    let src = "\
-if shell bash
-  set NATIVE 1
-end
-if shell fish
-  set FISH_ONLY 1
-end
-if shell fish
-  set A fish
-else
-  set A other
-end
-if shell fish
-  set B fish
-elif shell bash
-  set B bash
-end
-if not shell fish
-  set C 1
-end
-if shell bash and have cargo
-  set D 1
-end
-if shell fish and have cargo
-  set E 1
-end
-if shell bash or have cargo
-  set F 1
-end
-if have git
-  set G 1
-end";
-    let b = bash(src);
-
-    assert!(
-        b.contains("export NATIVE=\""),
-        "(1) self-shell not inlined: {}",
-        b
-    );
-    assert!(
-        !b.contains("FISH_ONLY"),
-        "(2) dead fish block leaked: {}",
-        b
-    );
-    assert!(
-        b.contains("export A=\"other\""),
-        "(3) else not inlined: {}",
-        b
-    );
-    assert!(
-        b.contains("export B=\"bash\""),
-        "(4) matching elif not inlined: {}",
-        b
-    );
-    assert!(
-        b.contains("export C=\""),
-        "(5) not-fold: body not inlined: {}",
-        b
-    );
-    assert!(
-        b.contains("command -v cargo"),
-        "(6) and+true: have-guard missing: {}",
-        b
-    );
-    assert!(
-        b.contains("export D=\""),
-        "(6) and+true: D body missing: {}",
-        b
-    );
-    assert!(
-        !b.contains("export E"),
-        "(7) and+false: dead block leaked: {}",
-        b
-    );
-    assert!(
-        b.contains("export F=\""),
-        "(8) or+true: body not inlined: {}",
-        b
-    );
-    assert!(
-        b.contains("command -v git"),
-        "(9) unknown have-guard removed: {}",
-        b
-    );
-    assert!(
-        b.contains("export G=\""),
-        "(9) unknown: G body missing: {}",
-        b
-    );
-}
-
-/// Multi-elif chain compiled for every shell:
-/// fish/zsh/bash heads fold to the matching shell's branch;
-/// for pwsh all three fold to false; then `os linux` is folded statically:
-///   on Linux → body inlined; on macOS/Windows → else falls through.
-#[test]
-fn prune_multi_elif_chain_all_shells() {
-    let src = "\
-if shell fish
-  set S fish
-elif shell zsh
-  set S zsh
-elif shell bash
-  set S bash
-elif os linux
-  set S linux
-else
-  set S other
-end";
-
-    let b = bash(src);
-    assert!(b.contains("export S=\"bash\""), "bash branch: {}", b);
-    assert!(!b.contains("if "), "bash: unexpected if-wrapper: {}", b);
-
-    let z = zsh(src);
-    assert!(z.contains("export S=\"zsh\""), "zsh branch: {}", z);
-    assert!(!z.contains("if "), "zsh: unexpected if-wrapper: {}", z);
-
-    let f = fish(src);
-    assert!(f.contains("set -gx S \"fish\""), "fish branch: {}", f);
-    assert!(!f.contains("if "), "fish: unexpected if-wrapper: {}", f);
-
-    // pwsh: shell branches all dead; then os linux is folded at compile time.
-    let p = pwsh(src);
-    #[cfg(target_os = "linux")]
-    {
-        // os linux → AlwaysTrue → linux body inlined, no if wrapper
-        assert!(
-            p.contains("$env:S = \"linux\""),
-            "pwsh linux: linux body missing: {}",
-            p
-        );
-        assert!(
-            !p.contains("if ("),
-            "pwsh linux: unexpected if wrapper: {}",
-            p
-        );
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // os linux → AlwaysFalse → else inlined, no if wrapper
-        assert!(
-            p.contains("$env:S = \"other\""),
-            "pwsh macos: else missing: {}",
-            p
-        );
-        assert!(
-            !p.contains("if ("),
-            "pwsh macos: unexpected if wrapper: {}",
-            p
-        );
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // os linux → AlwaysFalse → else inlined
-        assert!(
-            p.contains("$env:S = \"other\""),
-            "pwsh windows: else missing: {}",
-            p
-        );
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        // os linux unknown → kept as runtime check, else preserved
-        assert!(p.contains("$IsLinux"), "pwsh: os guard missing: {}", p);
-        assert!(
-            p.contains("$env:S = \"linux\""),
-            "pwsh: linux body missing: {}",
-            p
-        );
-        assert!(
-            p.contains("$env:S = \"other\""),
-            "pwsh: else preserved: {}",
-            p
-        );
-    }
-}
-
-// ── strip_quotes / Cond::Env / path-dedup integration ─────────────────────────
-
-/// Quoted path arguments are stripped of surrounding quotes at parse time,
-/// so the emitter never double-quotes them.
-#[test]
-fn quoted_path_is_stripped() {
-    // Double-quoted dir: emitter should see the bare path, not \"dir\".
-    let b = bash("path+ \"$HOME/.cargo/bin\"");
-    assert!(!b.contains("\\\"$HOME"), "bash double-quote leaked: {}", b);
-    assert!(b.contains("$HOME/.cargo/bin"), "bash path missing: {}", b);
-
-    let f = fish("path+ \"$HOME/.cargo/bin\"");
-    assert!(!f.contains("\\\"$HOME"), "fish double-quote leaked: {}", f);
-    assert!(f.contains("$HOME/.cargo/bin"), "fish path missing: {}", f);
-}
-
-/// `if env VAR` emits the correct check in each shell and is not statically folded.
-#[test]
-fn if_env_all_shells() {
-    let src = "if env CARGO_HOME\npath+ $CARGO_HOME/bin\nend";
-
-    let b = bash(src);
-    assert!(b.contains("CARGO_HOME"), "bash env cond: {}", b);
-    assert!(b.contains("-n \""), "bash -n check: {}", b);
-    assert!(b.contains("if "), "bash if wrapper: {}", b);
-
-    let f = fish(src);
-    assert!(f.contains("set -q CARGO_HOME"), "fish env cond: {}", f);
-    assert!(f.contains("if "), "fish if wrapper: {}", f);
-
-    let p = pwsh(src);
-    assert!(
-        p.contains("Test-Path env:CARGO_HOME"),
-        "pwsh env cond: {}",
-        p
-    );
-    assert!(p.contains("if ("), "pwsh if wrapper: {}", p);
-}
-
-/// `path+` in bash/pwsh emits a deduplication guard so re-sourcing the config
-/// does not accumulate duplicate entries in PATH.
-#[test]
-fn path_dedup_guard_present() {
-    let b = bash("path+ /usr/local/bin");
-    // bash guard: [[ "${PATH}" != *\"/usr/local/bin\"* ]] && export …
-    assert!(b.contains("[[ "), "bash guard missing: {}", b);
-    assert!(b.contains("/usr/local/bin"), "bash dir missing: {}", b);
-    // Should not appear twice
+fn locations_count_unicode_characters_and_preserve_original_lines() {
+    let error = parse("# comment\n  set X 中$bad").unwrap_err();
     assert_eq!(
-        b.matches("/usr/local/bin").count(),
-        2,
-        "bash dir count: {}",
-        b
-    ); // once in guard, once in add
-
-    // fish_add_path already deduplicates — no extra wrapper.
-    let f = fish("path+ /usr/local/bin");
-    assert!(!f.contains("[[ "), "fish: unexpected guard: {}", f);
-
-    let p = pwsh("path+ C:/tools");
-    assert!(p.contains("-notcontains"), "pwsh guard missing: {}", p);
-    assert!(
-        p.contains("-split ';'"),
-        "pwsh component guard missing: {}",
-        p
+        error.at,
+        Location {
+            line: 2,
+            column: 10
+        }
     );
-    assert!(p.contains("C:/tools"), "pwsh dir missing: {}", p);
+    assert!(error.to_string().contains("line 2, column 10"));
+    let error = parse("\n  if true\n").unwrap_err();
+    assert_eq!(error.at, Location { line: 2, column: 3 });
+    let error = parse("# comment\n中\0").unwrap_err();
+    assert_eq!(error.at, Location { line: 2, column: 2 });
+}
+
+#[test]
+fn targets_use_canonical_names_and_the_approved_matrix() {
+    assert!(Shell::parse("pwsh").is_none());
+    assert!(Os::parse("macos").is_none());
+    for shell in [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Powershell] {
+        for os in [Os::Linux, Os::Darwin, Os::Windows] {
+            assert_eq!(
+                Target::new(shell, os).is_ok(),
+                os != Os::Windows || shell == Shell::Powershell
+            );
+        }
+    }
+}
+
+#[test]
+fn literals_roundtrip_without_becoming_expansions_or_extra_words() {
+    fn check(value: &str) {
+        let mut quoted = String::from("\"");
+        for ch in value.chars() {
+            quoted.push_str(match ch {
+                '\\' => "\\\\",
+                '"' => "\\\"",
+                '$' => "\\$",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => {
+                    quoted.push(ch);
+                    continue;
+                }
+            });
+        }
+        quoted.push('"');
+        let nodes = parse(&format!("init tool {quoted}")).unwrap();
+        let Statement::Init(command) = &nodes[0].kind else {
+            panic!()
+        };
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(literal(&command.args[0]), value);
+    }
+    const ALPHABET: [char; 24] = [
+        'a', ' ', '#', '\'', '"', '$', '\\', '\n', '\t', ';', '(', ')', '>', '中', '\r', '😀', '‘',
+        '’', '‚', '‛', '“', '”', '„', '‟',
+    ];
+    check("");
+    for a in ALPHABET {
+        check(&a.to_string());
+        for b in ALPHABET {
+            check(&format!("{a}{b}"));
+            for c in ALPHABET {
+                check(&format!("{a}{b}{c}"));
+            }
+        }
+    }
 }

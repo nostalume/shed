@@ -45,8 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust 1.98.1 toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+      - name: Install Rust 1.99.1 toolchain
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
 
