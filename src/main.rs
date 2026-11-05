@@ -20,12 +20,12 @@ USAGE
   shed [--target-os OS] check [file]
   shed [--target-os OS] <shell> [file]
 
-Omit file to read stdin. check validates the next DSL without executing it.
+Omit file to read stdin. check validates the DSL without executing it.
 Shells: bash, zsh, fish, powershell
 OS names: linux, darwin, windows
 
-PowerShell generation is implemented (requires PowerShell 7.5+).
-Linux Bash is runtime-tested; Zsh/Fish and the full OS matrix await runtime checks.
+PowerShell requires 7.5+. Bash/Zsh/Fish target Linux and Darwin.
+Fish rejects PATH values containing empty entries before mutation.
 See docs/DSL.md for the language and plans/dsl-development.md for progress.
 ";
 
