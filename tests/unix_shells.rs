@@ -109,10 +109,11 @@ impl Session {
             .unwrap_or_else(|e| panic!("required shell {} unavailable: {e}", self.shell));
         assert!(
             out.status.success(),
-            "{}: stdout={} stderr={}",
+            "{}: stdout={} stderr={}\nsource:\n{}",
             self.shell,
             String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr).trim_start_matches('!')
+            String::from_utf8_lossy(&out.stderr).trim_start_matches('!'),
+            source.chars().take(1600).collect::<String>()
         );
         assert!(out.stdout.is_empty(), "{}: {:?}", self.shell, out.stdout);
         let bytes = fs::read(self.root.join("snapshot")).unwrap();
@@ -244,7 +245,12 @@ fn structured_calls_and_code_unit_scope(shell: &'static str) {
     };
     let (values, stderr) = s.run(&source, true, post, &["AFTER"]);
     assert_eq!(values, [Some("yes".into())]);
-    assert_eq!(stderr, vec![b'!'; 131_072]);
+    assert!(
+        stderr.iter().all(|b| *b == b'!'),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&stderr).trim_start_matches('!')
+    );
+    assert_eq!(stderr.len(), 131_072, "initializer stderr length");
     let mut expected = vec!["invocation".to_owned()];
     expected.extend(fixed.map(str::to_owned));
     expected.extend(["", "--caller", "'\"`$;|&<>[]*?#‘🙂’\r\n"].map(str::to_owned));

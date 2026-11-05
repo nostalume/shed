@@ -176,6 +176,7 @@ function __shed_filter_path
         end
         builtin set argv "$argv[1]" $argv[3..-1]
     end
+    builtin return 0
 end
 function __shed_path
     if builtin test -z "$argv[1]"; or builtin string match -q '*:*' -- "$argv[1]"
