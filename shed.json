@@ -16,9 +16,9 @@
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/nostalume/shed/releases/download/v0.1.6/shed-windows-x86_64.exe#/shed.exe",
+        "url": "https://github.com/nostalume/shed/releases/download/v$version/shed-windows-x86_64.exe#/shed.exe",
         "hash": {
-          "url": "$url.sha256"
+          "url": "https://github.com/nostalume/shed/releases/download/v$version/shed-windows-x86_64.exe.sha256"
         }
       }
     }

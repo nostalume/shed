@@ -2,9 +2,18 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "codex/**"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,68 +21,205 @@ env:
 
 jobs:
   ci:
-    name: Lint & Test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            name: Lint & Shell Tests (Ubuntu)
+          - runner: windows-latest
+            name: PowerShell Tests (Windows)
+          - runner: macos-15
+            name: Shell Tests (Darwin)
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust 1.98.1 toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
           components: rustfmt, clippy
-
-      - name: Cache cargo registry + build artefacts
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-rust-1.98.1-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-rust-1.98.1-cargo-
-
+      - name: Install Linux test shells
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          mkdir -p "$RUNNER_TEMP/fish"
+          curl --fail --location --silent --show-error \
+            https://github.com/fish-shell/fish-shell/releases/download/4.9.3/fish-4.9.3-linux-x86_64.tar.xz \
+            -o "$RUNNER_TEMP/fish.tar.xz"
+          echo "8f643d10ad1abb0ef7072764c01ceb5cf61b2d373fda400cf60f0bad69b7e095  $RUNNER_TEMP/fish.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/fish.tar.xz" -C "$RUNNER_TEMP/fish" fish
+          echo "$RUNNER_TEMP/fish" >> "$GITHUB_PATH"
+      - name: Install Darwin test shells
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash fish
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: Record runtimes and require PowerShell 7.5+
+        shell: pwsh
+        run: |
+          rustc --version --verbose
+          cargo --version
+          if ($PSVersionTable.PSVersion -lt [version]'7.5') { throw 'PowerShell 7.5+ required' }
+          $PSVersionTable.PSVersion
+          if (-not $IsWindows) {
+            foreach ($shell in @('bash', 'zsh', 'fish')) {
+              & $shell --version
+              if ($LASTEXITCODE -ne 0) { throw "$shell unavailable" }
+            }
+          }
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
-
       - name: Clippy
+        if: runner.os == 'Linux'
         run: cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Tests
+      - name: Frontend, specialization, CLI, codecs, and real-shell tests
         run: cargo test --all --locked
-
-      - name: Validate generated Bash syntax
+      - name: Build release
+        run: cargo build --release --locked
+      - name: Check the DSL from file and stdin
+        shell: bash
+        run: |
+          cargo run --quiet --locked -- check examples/env.shed
+          cargo run --quiet --locked -- check < examples/env.shed
+      - name: Validate release-helper syntax
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           bash -n scripts/release.sh
-          output="$(printf '%s\n' \
-            'set EDITOR nvim' \
-            'path+ ~/.cargo/bin' \
-            'if have cargo' \
-            '  alias c cargo' \
-            'end' | cargo run --quiet -- bash)"
-          bash -n <<< "$output"
+          pwsh -NoProfile -Command \
+            '$errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/release.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Out-Host; exit 1 }'
+      - name: Package updater and release-helper tests
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -p '*_test.py' -v
 
-      - name: Validate generated Fish syntax
-        shell: bash
-        run: |
-          if command -v fish >/dev/null 2>&1; then
-            printf '%s\n' 'set EDITOR nvim' 'path+ ~/.cargo/bin' \
-              | cargo run --quiet -- fish > /tmp/shed.fish
-            fish --no-execute /tmp/shed.fish
-          else
-            echo "fish is not installed; skipping syntax check"
-          fi
+  msrv:
+    name: Rust 1.85 minimum
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.85.0
+      - run: cargo check --all-targets --locked
 
-      - name: Validate generated PowerShell syntax
-        shell: bash
+  artifacts:
+    name: Build ${{ matrix.artifact }}
+    needs: [ci, msrv]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: shed-linux-x86_64
+            binary: shed
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: shed-linux-aarch64
+            binary: shed
+          - os: macos-15
+            target: x86_64-apple-darwin
+            artifact: shed-macos-x86_64
+            binary: shed
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: shed-macos-aarch64
+            binary: shed
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: shed-windows-x86_64.exe
+            binary: shed.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - name: Require matching release tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -Command \
-              '$errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/release.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Out-Host; exit 1 }'
-            printf '%s\n' 'set EDITOR nvim' 'path+ $env:USERPROFILE/tools' \
-              | cargo run --quiet -- pwsh > /tmp/shed.ps1
-            pwsh -NoProfile -Command \
-              '$null=$null; [System.Management.Automation.Language.Parser]::ParseFile("/tmp/shed.ps1", [ref]$null, [ref]$null) | Out-Null'
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $package = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq shed
+          if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or $env:GITHUB_REF_NAME -cne "v$($package.version)") { throw 'tag and Cargo package version must match' }
+          git merge-base --is-ancestor HEAD "origin/$env:DEFAULT_BRANCH"
+      - name: Install musl linker
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
+      - name: Install aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends gcc-aarch64-linux-gnu
+      - name: Build exact target
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Prepare binary and checksum
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          cp "target/$TARGET/release/$BINARY" "$ARTIFACT"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
           else
-            echo "pwsh is not installed; skipping syntax check"
+            shasum -a 256 "$ARTIFACT" > "$ARTIFACT.sha256"
           fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+          if-no-files-found: error
+
+  packages:
+    name: Verify package catalogs
+    needs: artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: shed-*
+          merge-multiple: true
+          path: dist
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          github_access_token: ${{ github.token }}
+      - name: Render catalogs from the checked assets
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          python3 scripts/update-packages.py "$version" --assets-dir dist
+      - name: Evaluate Nix and install the exact Linux artifact
+        run: |
+          nix flake check --no-build --no-write-lock-file
+          nix build --impure --no-write-lock-file --expr 'let f = builtins.getFlake (toString ./.); pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux; in (pkgs.callPackage ./nix/shed.nix {}).overrideAttrs (_: { src = ./dist/shed-linux-x86_64; })'
+          expected=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          test "$(./result/bin/shed --version)" = "shed $expected"
+          ./result/bin/shed check examples/env.shed

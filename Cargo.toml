@@ -1,9 +1,9 @@
 [package]
 name        = "shed"
-version     = "0.1.6"
+version     = "0.2.0"
 edition     = "2024"
 rust-version = "1.85"
-description = "Shell Environment Declaration — compile env.shed to bash, zsh, fish, or pwsh"
+description = "Shell Environment Declaration — compile structured declarations to Bash, Zsh, Fish, or PowerShell"
 license     = "MIT"
 repository  = "https://github.com/nostalume/shed"
 

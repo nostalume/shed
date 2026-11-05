@@ -31,7 +31,7 @@ stdenv.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Shell Environment Declaration — compile env.shed to bash, zsh, fish, or pwsh";
+    description = "Shell Environment Declaration — compile declarations to Bash, Zsh, Fish, or PowerShell";
     homepage    = "https://github.com/nostalume/shed";
     license     = licenses.mit;
     maintainers = [ ];

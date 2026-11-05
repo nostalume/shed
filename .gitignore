@@ -1,2 +1,4 @@
 /target
 .env
+.agents/
+__pycache__/
