@@ -39,6 +39,11 @@ fn compile_and_admission_errors_never_write_partial_scripts() {
             "reserved bash alias name",
         ),
         (
+            vec!["--target-os=linux", "fish"],
+            &b"if false\nalias status = program\nend"[..],
+            "reserved fish alias name",
+        ),
+        (
             vec!["--target-os=linux", "zsh"],
             &b"if false\nalias nocorrect = program\nend"[..],
             "reserved zsh alias name",
@@ -83,6 +88,11 @@ fn compile_and_admission_errors_never_write_partial_scripts() {
             "{args:?}: {:?}",
             result.stderr
         );
+    }
+    for name in ["end", "eval", "set"] {
+        let source = format!("alias {name} = program\n");
+        let result = shed(&["--target-os=linux", "bash"], source.as_bytes());
+        assert!(result.status.success(), "{:?}", result.stderr);
     }
 }
 
@@ -166,4 +176,14 @@ fn specialization_accepts_the_frontends_combined_capacity_without_execution() {
     assert_eq!(result.status.code(), Some(1));
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("line 2"));
+}
+
+#[test]
+fn long_branch_chains_compile_without_recursive_emission() {
+    let source = "if env A\n".to_owned() + &"elif env A\n".repeat(20_000) + "end\n";
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        let result = shed(&["--target-os=linux", shell], source.as_bytes());
+        assert!(result.status.success(), "{shell}: {:?}", result.stderr);
+        assert!(result.stderr.is_empty());
+    }
 }

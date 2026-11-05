@@ -7,17 +7,23 @@ use std::fmt::Write;
 mod tests;
 
 pub fn validate(nodes: &[Node], shell: Shell) -> Result<(), String> {
-    const RESERVED: &str = "! { } case coproc do done elif else end esac fi for foreach function if in repeat select switch then time until while begin break continue return builtin command exec eval source export unset set and or not";
-    const ZSH_RESERVED: &str = "nocorrect noglob declare float integer local readonly typeset";
+    let reserved = match shell {
+        Shell::Bash => {
+            "case coproc do done elif else esac fi for function if in select then time until while builtin"
+        }
+        Shell::Zsh => {
+            "do done esac then elif else fi for case if while function repeat time until select coproc nocorrect foreach end declare export float integer local readonly typeset builtin command exec noglob"
+        }
+        Shell::Fish => {
+            "_ and argparse begin break builtin case command continue else end eval exec for function if not or read return set status string switch test time while"
+        }
+        Shell::Powershell => unreachable!(),
+    };
     for node in nodes {
         match &node.kind {
             Statement::Alias { name, .. }
                 if name.starts_with("__shed_")
-                    || RESERVED.split_whitespace().any(|keyword| keyword == name)
-                    || (shell == Shell::Zsh
-                        && ZSH_RESERVED
-                            .split_whitespace()
-                            .any(|keyword| keyword == name)) =>
+                    || reserved.split_whitespace().any(|keyword| keyword == name) =>
             {
                 return Err(format!(
                     "line {}, column {}: reserved {} alias name {name:?}",
@@ -330,26 +336,33 @@ impl Emitter {
         self.close_if();
     }
     fn branches(&mut self, branches: &[(Cond, Vec<Node>)], otherwise: &[Node], at: Location) {
-        let Some(((condition, body), tail)) = branches.split_first() else {
+        if branches.is_empty() {
             self.statements(otherwise);
             return;
-        };
-        self.open_function("__shed_condition");
-        self.condition(condition);
-        self.line("\\builtin return \"$1\"", "builtin return $argv[1]");
-        self.end_function();
-        self.open_if("__shed_condition");
-        self.statements(body);
-        self.out.push_str("else\n");
-        self.open_if(if self.fish() {
-            "builtin test $status -ne 1"
-        } else {
-            "\\builtin test \"$?\" -ne 1"
-        });
-        self.failure(at);
-        self.close_if();
-        self.branches(tail, otherwise, at);
-        self.close_if();
+        }
+        // A one-pass block also avoids native parsers' recursive elif grammar.
+        self.line("while \\builtin true; do", "while builtin true");
+        for (condition, body) in branches {
+            self.open_function("__shed_condition");
+            self.condition(condition);
+            self.line("\\builtin return \"$1\"", "builtin return $argv[1]");
+            self.end_function();
+            self.open_if("__shed_condition");
+            self.statements(body);
+            self.line("\\builtin break", "builtin break");
+            self.out.push_str("else\n");
+            self.open_if(if self.fish() {
+                "builtin test $status -ne 1"
+            } else {
+                "\\builtin test \"$?\" -ne 1"
+            });
+            self.failure(at);
+            self.close_if();
+            self.close_if();
+        }
+        self.statements(otherwise);
+        self.line("\\builtin break", "builtin break");
+        self.line("done", "end");
     }
     fn code_unit(&mut self, producer: &str, at: Location) {
         let call = if self.fish() {
@@ -389,9 +402,15 @@ impl Emitter {
                         )
                         .unwrap();
                     }
+                    self.line("if", "if begin");
                     self.open_function(name);
                     self.command_body(command, false, true);
                     self.end_function();
+                    self.line("then", "end");
+                    self.line("\\builtin true", "builtin true");
+                    self.out.push_str("else\n");
+                    self.failure(node.at);
+                    self.close_if();
                 }
                 Statement::Init(command) => {
                     self.open_function("__shed_initializer");

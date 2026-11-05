@@ -198,6 +198,10 @@ It records interpreter versions and checks Rust 1.85 separately with
 `cargo check --all-targets --locked`. Shells and the minimum Rust toolchain are
 acquired only on disposable hosted runners. Workflow configuration is separate
 from the observed results recorded in the development plan.
+The same CI builds all five release artifacts, verifies the Scoop/Nix updater and
+installs the Linux artifact through the Nix derivation on a disposable runner.
+Release helpers leave live package catalog versions/hashes intact until the new
+assets exist; one post-release update advances both catalogs together.
 
 - [DSL specification](docs/DSL.md): approved language semantics and current status.
 - [Development stages](plans/dsl-development.md): dependencies and acceptance evidence.

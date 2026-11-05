@@ -1,126 +1,132 @@
 # Release guide
 
-This guide describes the repository's current build and distribution paths.
-User installation commands are in the [README](../README.md).
+The source checkout and published package catalogs have separate versions until a
+new release is available. User installation commands are in the [README](../README.md).
 
-## Local checks
+## Checks and release preparation
 
-Use the toolchain selected by [`rust-toolchain.toml`](../rust-toolchain.toml).
-Cargo is included with that toolchain.
+Use the toolchain in [rust-toolchain.toml](../rust-toolchain.toml):
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --all --locked
 cargo build --release --locked
+python3 -B -m unittest discover -s tests -p '*_test.py' -v
 ```
 
-All checks must succeed before releasing. The declared minimum Rust version in
-`Cargo.toml` is separate from the development pin.
+Interpreter prerequisites and tested versions are in the
+[development plan](../plans/dsl-development.md). The Python packaging tools require
+Python 3.9+. PowerShell release preparation requires PowerShell 7.5+.
 
-## Create a release
-
-Start on `main` with a clean working tree. The Bash helper requires Python 3.
-After local checks, run one helper:
+Start at the repository root, on `main`, with a clean working tree. Run one helper:
 
 ```sh
-bash scripts/release.sh 0.1.7
+bash scripts/release.sh 0.2.0
 ```
-
-Or in PowerShell:
 
 ```powershell
-.\scripts\release.ps1 0.1.7
+.\scripts\release.ps1 0.2.0
 ```
 
-The helpers update `Cargo.toml`, `Cargo.lock`, and the version in `nix/shed.nix`;
-run `cargo check --locked`; commit the version change; create an annotated
-`vX.Y.Z` tag; and request an atomic push of the branch and tag. They do not run
-the full local checks above.
+These commands update only `Cargo.toml` and `Cargo.lock`, run `cargo check --locked`,
+commit, create an annotated `vMAJOR.MINOR.PATCH` tag, and atomically push main and
+the tag. They publish Git refs. They stop on native command failure; a `git diff`
+error is distinguished from its normal "changes present" result. The full checks
+above remain required; tag CI also enforces them before publishing binaries.
 
-This command publishes Git refs and triggers the release workflow. Check the
-command's result and the remote branch/tag before retrying after failure; a
-failed push can leave a local commit or tag. Nix hashes are refreshed later,
-after the new binaries exist.
+Scoop and Nix keep pointing to the preceding published release during preparation.
+The helpers do not pair a new Nix version with the old release's hashes. A failed
+command can leave modified Cargo files, a commit, or a local tag. Inspect local
+and remote state before retrying; do not assume a failed push or API request had
+no effect.
 
-## GitHub Actions
+## Build once, verify, publish
 
-| Configuration | Trigger | Responsibility |
+| Workflow | Trigger | Responsibility |
 | --- | --- | --- |
-| `ci.yml` | Push to `main`, `master`, or `codex/**`; PR to `main`/`master`; manual | Full shell suite on Linux/Darwin, PowerShell on Windows, formatting/Clippy, CLI/examples, release builds and a separate Rust 1.85 compile check. |
-| `release.yml` | Push of a `v*` tag | Build five target binaries and publish a GitHub Release with checksums. |
-| `scoop-update.yml` | Successful Release workflow | Download the Windows binary and commit an updated `shed.json`. |
-| `nix-update.yml` | Successful Release workflow | Refresh binary hashes in `nix/shed.nix`, evaluate the flake, and commit the result. |
+| `ci.yml` | Main/master/codex pushes, main/master PRs, manual, reusable call | Real-shell matrix, Rust minimum, five release builds, catalog tests and a native Nix consumer check. |
+| `release.yml` | A `v*` tag | Reuse CI, then publish those exact checked artifacts with a job-scoped write token. |
+| `packages-update.yml` | A successful tag-triggered Release run | Verify the source/tag binding and all published assets; update Scoop and Nix in one commit. |
 
-[`dependabot.yml`](../.github/dependabot.yml) is dependency-update configuration,
-not a workflow. It checks Cargo monthly and GitHub Actions weekly.
+Remote actions are pinned to commits and covered by the existing Dependabot
+configuration. CI has read-only repository access; it never creates a release.
+The release publisher receives write access only after the checks complete.
+Release tags must be stable numeric versions matching the Cargo package version.
+The publisher verifies checksums again and uses `gh release create --verify-tag`;
+an existing release causes an error rather than silently replacing its assets.
 
-CI and release builds pin the same toolchain as local development. CI requires
-PowerShell 7.5+ for real generated-script, scalar-codec, and native-argument tests;
-it fails when the interpreter is absent rather than silently skipping them.
-The [Stage 6 CI run](https://github.com/nostalume/shed/actions/runs/41952120266)
-passed Ubuntu, Windows, Darwin and the Rust 1.85 compile check. Unix jobs require
-Bash 5.2+, Zsh and Fish 4.9+; unavailable interpreters fail their required suites.
-Linux obtains a checksum-verified official Fish binary, and Darwin obtains modern
-Bash/Fish through Homebrew, only on disposable runners. The tested versions and
-adapter limits are recorded in [Stage 6](../plans/dsl-development.md).
-This validation run does not invoke a release or publish a package.
+| Rust target | Binary |
+| --- | --- |
+| `x86_64-unknown-linux-musl` | `shed-linux-x86_64` |
+| `aarch64-unknown-linux-musl` | `shed-linux-aarch64` |
+| `x86_64-apple-darwin` | `shed-macos-x86_64` |
+| `aarch64-apple-darwin` | `shed-macos-aarch64` |
+| `x86_64-pc-windows-msvc` | `shed-windows-x86_64.exe` |
 
-The two post-release update workflows push independently. Verify that both
-commits reach `main`; simultaneous updates can require resolving a failed push.
+Each binary has a matching `.sha256` file containing its digest and exact basename.
+CI builds all five variants. Its Nix consumer check installs the just-built Linux
+x86_64 binary, checks its version and checks the DSL example. Cross-compilation
+does not certify execution on every CPU, and this does not perform a real Scoop
+installation or publish a package.
 
-## Release artifacts
+## Scoop and Nix catalogs
 
-| Rust target | Runner | Binary |
-| --- | --- | --- |
-| `x86_64-unknown-linux-musl` | Ubuntu | `shed-linux-x86_64` |
-| `aarch64-unknown-linux-musl` | Ubuntu | `shed-linux-aarch64` |
-| `x86_64-apple-darwin` | macOS | `shed-macos-x86_64` |
-| `aarch64-apple-darwin` | macOS | `shed-macos-aarch64` |
-| `x86_64-pc-windows-msvc` | Windows | `shed-windows-x86_64.exe` |
+[scripts/update-packages.py](../scripts/update-packages.py) owns both catalogs.
+It validates the version, downloads all five binaries and sidecars, checks every
+digest and basename, then renders both files before writing either. A missing,
+corrupt or mismatched asset stops the update. An older delayed release is ignored;
+the same release is safe to verify again.
 
-The workflow uses musl for Linux and installs the required linkers. Every binary
-has a companion `.sha256` file. The installer verifies that checksum before
-placing the binary in the user's install directory.
+Scoop stores the Windows SHA-256 in [shed.json](../shed.json). Its autoupdate URL
+retains `$version`; the checksum URL names the real `.exe.sha256` asset without
+the `#/shed.exe` local rename fragment.
 
-Scoop is updated by its post-release workflow. The current manifest's
-`autoupdate.url` contains a fixed version rather than a version placeholder;
-do not rely on that template alone to advance the download URL.
+[nix/shed.nix](../nix/shed.nix) stores flat-file SHA-256 digests in SRI form for the
+four Unix binaries. Computing these digests needs no local Nix installation.
+The [flake](../flake.nix) exposes each platform's downloaded binary as `shed` and
+the default package. The version and hashes advance together after assets exist.
 
-## Nix packaging
+The updater workflow runs trusted default-branch code, checks the tag's commit
+against the successful Release run and default-branch history, and commits both
+catalogs together. Its concurrency queue preserves pending updates; a version
+check prevents a delayed older event from rolling catalogs back. An unrelated
+main commit can still reject a push; rerun after inspecting the remote state.
 
-[`nix/shed.nix`](../nix/shed.nix) packages downloaded release binaries with
-per-platform SRI hashes. [`flake.nix`](../flake.nix) exposes that derivation for
-Linux and Darwin on x86_64/aarch64 as `shed` and the default package.
-
-The version and binary hashes must describe the same release. The release
-helper changes the version first; the post-release workflow later refreshes
-hashes. A checkout between those operations may not be installable with Nix.
-
-Manual hash refresh requires Nix, curl, sed, and a Bash with associative-array
-support:
+Manual verification/update, after the release exists:
 
 ```sh
-bash nix/update.sh 0.1.6
+python3 scripts/update-packages.py 0.2.0
+```
+
+For already downloaded assets:
+
+```sh
+python3 scripts/update-packages.py 0.2.0 --assets-dir dist
+```
+
+Inspect the two-file diff before committing it. Where Nix is already available:
+
+```sh
 nix flake check --no-build --no-write-lock-file
 nix build .#shed
-```
-
-The first command rewrites the derivation. Flake evaluation alone does not build
-or run the package. Confirm the installed binary as well:
-
-```sh
 nix run . -- --version
 ```
 
-## Completion checklist
+Flake evaluation alone is not an installation check. These catalog conventions
+follow [Scoop's manifest specification](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifests),
+[Scoop autoupdate](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifest-Autoupdate),
+and [Nixpkgs fetchurl](https://nixos.org/manual/nixpkgs/stable/#fetchurl).
 
-- [ ] Local checks pass.
-- [ ] Remote package version and tag agree.
-- [ ] All five binaries and checksums are attached to the GitHub Release.
-- [ ] Scoop and Nix update commits reach `main`.
-- [ ] Nix version and all hashes match the release.
-- [ ] The installer and packaged binary report the expected version.
+## Publication completion
 
-Other package managers and crates.io publication are not part of the current
-automated release path.
+- [ ] The intended tag and package version identify the same source.
+- [ ] CI and all five target builds pass.
+- [ ] The release contains all five binaries and their exact checksums.
+- [ ] One Scoop/Nix update commit reaches the default branch.
+- [ ] Catalog URLs, versions and digests resolve the intended release.
+- [ ] Native consumer checks report the expected version.
+
+Preparing or testing this workflow does not itself authorize a tag, release,
+catalog push, or other publication. Other package managers and crates.io are not
+part of this release path.

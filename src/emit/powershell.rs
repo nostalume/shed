@@ -6,7 +6,7 @@ use std::fmt::Write;
 #[path = "tests.rs"]
 mod tests;
 
-pub fn generate(nodes: &[Node], target: Target) -> Result<String, String> {
+pub fn generate(nodes: &[Node], target: Target) -> String {
     let mut out = include_str!("../powershell.ps1").to_owned();
     out.push_str(
         r#"
@@ -25,7 +25,7 @@ $ErrorActionPreference = $__shed_preferences[0]
 $PSNativeCommandUseErrorActionPreference = $__shed_preferences[1]
 }
 "#);
-    Ok(out)
+    out
 }
 
 pub fn validate(nodes: &[Node]) -> Result<(), String> {

@@ -509,6 +509,36 @@ lanes. They do not prove every version, architecture, arbitrary native argument
 parser, or embedded program. The validation branch contains isolated snapshots;
 the local main ref and original staging area were preserved.
 
+## Final review after Stage 6
+
+Status: fixes prepared on 2026-11-05; current validation is recorded below.
+
+- Reproduced a compiler stack overflow with 20,000 runtime-dependent `elif`
+  branches. Unix emission now uses sequential checks in a single-pass block with
+  explicit error arms, avoiding recursive native `elif` grammar too. The CLI
+  regression covers every backend; runtime cases cover first
+  match, skipped later queries and failure before a later known-true branch.
+- Unix alias definition was not guarded, so a readonly Bash function collision
+  could be followed by later effects and a successful final status. Definition
+  is now checked, and a real readonly-function witness verifies failure stopping.
+  Alias admission is backend-specific: Fish essential builtins are rejected even
+  in dead branches, while ordinary names remain available where the target allows.
+- Both release helpers now stop on native command failures and distinguish Git
+  diff errors from changed files. Version edits are prepared before writing either
+  Cargo manifest; no pre-release Nix version/hash mismatch is created.
+- Scoop and Nix updates have one verified-asset generator and one serialized
+  two-file commit. The fixed Scoop version template/checksum URL, stale release
+  guard and failed-download/no-write cases are covered by dependency-free tests.
+- Release reuses CI's tests, exact five-target builds and Nix consumer check;
+  publishing receives only checked artifacts and a separate write token. Workflow
+  event data enters through environment values and source/tag identity checks.
+  No local tools are installed and no release is executed by these checks.
+
+Local evidence: Windows CLI regression and Clippy pass; existing WSL Bash passes
+the branch/alias cases. Packaging unit tests pass in WSL, with PowerShell helper
+execution explicitly deferred to CI because WSL has no PowerShell installed.
+The final native matrix, five target builds and Nix consumer run are pending.
+
 ## Validation and execution boundaries
 
 Use the repository-selected toolchain. Existing Rust checks are:

@@ -237,16 +237,19 @@ fn structured_calls_and_code_unit_scope(shell: &'static str) {
         "function Persisted { \\builtin printf persisted; }\n\n\n"
     };
     fs::write(s.root.join("code"), body).unwrap();
-    let source = format!(
+    let mut source = format!(
         "set PATH \"${{env:ROOT}}\"\nalias native_fixture = native_fixture argv \"${{env:ROOT}}/args\" \"${{env:LATE}}\" {args}\nalias where = native_fixture where \"${{env:ROOT}}/location\"\nalias noargs = \"${{env:ROOT}}/native_fixture\"\ninit \"${{env:ROOT}}/native_fixture\" argv \"${{env:ROOT}}/init-args\" {args}\ninit \"${{env:ROOT}}/native_fixture\" emit \"${{env:ROOT}}/code\" 0\nset AFTER yes\n"
+    );
+    source.push_str(
+        "alias printf = \"${env:ROOT}/native_fixture\" argv \"${env:ROOT}/builtin-args\" '' 'a b'\n",
     );
     let source = format!(
         "raw {shell} <<CODE\nbuiltin printf '%s' 'line1\r\nline2\n\n' > ./raw-bytes\n\nCODE\n{source}"
     );
     let post = if shell == "fish" {
-        "builtin set -gx LATE invocation\nnative_fixture '' --caller \"$CALLER\"; or exit 84\nnoargs; or exit 85\nbuiltin set -gx --path PATH \"$ROOT/other\"\nwhere; or exit 86\nPersisted > ./persisted"
+        "builtin set -gx LATE invocation\nnative_fixture '' --caller \"$CALLER\"; or exit 84\nnoargs; or exit 85\nbuiltin set -gx --path PATH \"$ROOT/other\"\nwhere; or exit 86\nprintf; or exit 88\nPersisted > ./persisted"
     } else {
-        "\\builtin export LATE=invocation\nnative_fixture '' --caller \"$CALLER\" || exit 84\nnoargs || exit 85\n\\builtin export PATH=\"$ROOT/other\"\nwhere || exit 86\nPersisted > ./persisted"
+        "\\builtin export LATE=invocation\nnative_fixture '' --caller \"$CALLER\" || exit 84\nnoargs || exit 85\n\\builtin export PATH=\"$ROOT/other\"\nwhere || exit 86\nprintf || exit 88\nPersisted > ./persisted"
     };
     let (values, stderr) = s.run(&source, true, post, &["AFTER"]);
     assert_eq!(values, [Some("yes".into())]);
@@ -261,6 +264,11 @@ fn structured_calls_and_code_unit_scope(shell: &'static str) {
     expected.extend(["", "--caller", "'\"`$;|&<>[]*?#‘🙂’\r\n"].map(str::to_owned));
     assert_eq!(arguments(s.root.join("args")), expected, "{shell}");
     assert_eq!(arguments(s.root.join("init-args")), fixed, "{shell}");
+    assert_eq!(
+        arguments(s.root.join("builtin-args")),
+        ["", "a b"],
+        "{shell}"
+    );
     assert_eq!(fs::read(s.root.join("persisted")).unwrap(), b"persisted");
     assert_eq!(
         fs::read(s.root.join("raw-bytes")).unwrap(),
@@ -343,6 +351,21 @@ fn conformance(shell: &'static str) {
     structured_calls_and_code_unit_scope(shell);
     failures_propagate_without_evaluating_failed_output(shell);
     scalar_and_native_argument_roundtrip(shell);
+    let s = Session::new(shell);
+    let source = "set HOME relative\nset YES yes\nset NO ''\nif env NO\nset RESULT wrong\nelif env YES\nset RESULT middle\nelif exists \"${home}\"\nset RESULT wrong\nelse\nset RESULT wrong\nend\n";
+    let (values, stderr) = s.run(source, true, "", &["RESULT"]);
+    assert_eq!(values, [Some("middle".into())]);
+    assert!(stderr.is_empty());
+    let source = "set BEFORE kept\nset HOME relative\nset NO ''\nif env NO\nset AFTER wrong\nelif exists \"${home}\"\nset AFTER wrong\nelif true\nset AFTER wrong\nend\n";
+    let (values, stderr) = s.run(source, false, "", &["BEFORE", "AFTER"]);
+    assert_eq!(values, [Some("kept".into()), None]);
+    assert!(!stderr.is_empty());
+    if shell == "bash" {
+        let source = "raw bash <<CODE\nfunction locked { :; }\nbuiltin readonly -f locked\nCODE\nset BEFORE kept\nalias locked = missing\nset AFTER wrong\n";
+        let (values, stderr) = s.run(source, false, "", &["BEFORE", "AFTER"]);
+        assert_eq!(values, [Some("kept".into()), None]);
+        assert!(!stderr.is_empty());
+    }
     if shell == "fish" {
         let s = Session::new(shell);
         for value in ["", ":old", "old:", "old::new"] {

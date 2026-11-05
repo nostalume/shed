@@ -401,6 +401,15 @@ Real-interpreter CI has passed for all declared pairs, including the approved Fi
 representability errors. Exact runtime versions and scope are recorded in the
 development plan; this does not certify arbitrary shell versions or embedded code.
 
+Unix ordered branches use sequential condition checks in a single-pass block.
+The first selected body leaves that block; otherwise the fallback runs. Every
+reached condition returns true, false, or error; an error arm immediately returns
+failure before later conditions. The number of `elif` branches does not add Rust
+or native parser nesting. Alias definition failures also stop later DSL effects.
+Reserved alias names are checked per backend before specialization, including
+Fish's essential builtins; ordinary builtin names may still be wrapped where
+the target permits it.
+
 The PowerShell adapter requires 7.5+ for present-empty environment values.
 The Bash adapter requires 5.2+ and rejects older versions before DSL effects.
 The Fish adapter requires 4.9+; older versions are rejected before DSL effects.

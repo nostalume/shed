@@ -1,0 +1,57 @@
+name: Update package catalogs
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-catalogs
+  queue: max
+
+jobs:
+  update:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Bind the release tag to the successful source
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" HEAD
+      - name: Verify all assets and update both catalogs
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: python3 scripts/update-packages.py "$TAG"
+      - name: Commit both catalogs together
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add shed.json nix/shed.nix
+          if git diff --cached --quiet; then
+            exit 0
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then exit "$status"; fi
+          fi
+          git commit -m "packages: update Scoop and Nix to $TAG"
+          git push origin "HEAD:$GITHUB_REF_NAME"

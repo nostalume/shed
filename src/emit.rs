@@ -10,8 +10,8 @@ pub fn generate(nodes: Vec<Node>, target: Target) -> Result<String, String> {
         unix::validate(&nodes, target.shell)?;
     }
     let nodes = crate::prune::specialize(nodes, target);
-    match target.shell {
+    Ok(match target.shell {
         Shell::Powershell => powershell::generate(&nodes, target),
-        _ => Ok(unix::generate(&nodes, target)),
-    }
+        _ => unix::generate(&nodes, target),
+    })
 }
