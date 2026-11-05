@@ -1,17 +1,6 @@
-use std::io::Write;
-use std::process::{Command, Output, Stdio};
-
-fn shed(args: &[&str], source: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_shed"))
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(source).unwrap();
-    child.wait_with_output().unwrap()
-}
+mod common;
+use common::shed;
+use std::process::Command;
 
 #[test]
 fn check_accepts_the_next_language_without_evaluating_it() {

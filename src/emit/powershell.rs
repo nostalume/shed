@@ -3,11 +3,10 @@ use crate::ast::*;
 use std::fmt::Write;
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
 
 pub fn generate(nodes: &[Node], target: Target) -> String {
-    let mut out = include_str!("../powershell.ps1").to_owned();
+    let mut out = include_str!("powershell/runtime.ps1").to_owned();
     out.push_str(
         r#"
 $__shed_preferences = @($ErrorActionPreference, $PSNativeCommandUseErrorActionPreference)
@@ -28,71 +27,11 @@ $PSNativeCommandUseErrorActionPreference = $__shed_preferences[1]
     out
 }
 
-pub fn validate(nodes: &[Node]) -> Result<(), String> {
-    for node in nodes {
-        match &node.kind {
-            Statement::Alias { name, .. } => {
-                // Keywords need expression invocation, and runtime helpers must remain private.
-                let lower = name.to_ascii_lowercase();
-                if lower.starts_with("__shed_")
-                    || matches!(
-                        lower.as_str(),
-                        "begin"
-                            | "break"
-                            | "catch"
-                            | "class"
-                            | "clean"
-                            | "continue"
-                            | "data"
-                            | "define"
-                            | "do"
-                            | "dynamicparam"
-                            | "else"
-                            | "elseif"
-                            | "end"
-                            | "enum"
-                            | "exit"
-                            | "filter"
-                            | "finally"
-                            | "for"
-                            | "foreach"
-                            | "from"
-                            | "function"
-                            | "if"
-                            | "in"
-                            | "inlinescript"
-                            | "parallel"
-                            | "param"
-                            | "process"
-                            | "return"
-                            | "sequence"
-                            | "switch"
-                            | "throw"
-                            | "trap"
-                            | "try"
-                            | "until"
-                            | "using"
-                            | "var"
-                            | "while"
-                            | "workflow"
-                    )
-                {
-                    return Err(format!(
-                        "line {}, column {}: reserved PowerShell alias name {name:?}",
-                        node.at.line, node.at.column
-                    ));
-                }
-            }
-            Statement::If(branch) => {
-                for (_, body) in &branch.branches {
-                    validate(body)?;
-                }
-                validate(&branch.otherwise)?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+pub fn reserved_alias(name: &str) -> bool {
+    // Keywords need expression invocation, and runtime helpers must remain private.
+    let lower = name.to_ascii_lowercase();
+    let reserved = "begin break catch class clean continue data define do dynamicparam else elseif end enum exit filter finally for foreach from function if in inlinescript parallel param process return sequence switch throw trap try until using var while workflow";
+    lower.starts_with("__shed_") || reserved.split_whitespace().any(|keyword| keyword == lower)
 }
 
 fn literal(value: &str) -> String {

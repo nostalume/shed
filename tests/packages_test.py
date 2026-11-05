@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import importlib.util
 import json
 import os
 import shutil
@@ -8,11 +7,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from scripts import update_packages as packages
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("packages", ROOT / "scripts/update-packages.py")
-packages = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(packages)
 
 
 class CatalogTests(unittest.TestCase):

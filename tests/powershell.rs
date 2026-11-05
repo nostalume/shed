@@ -1,9 +1,10 @@
 //! Real-session tests: no generated-text assertions certify runtime behavior.
+mod common;
+use common::{arguments as argv, quote as dsl};
 use std::{
     fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    path::PathBuf,
+    process::{Command, Output},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -39,20 +40,7 @@ impl Session {
         } else {
             "linux"
         };
-        let mut compiler = Command::new(env!("CARGO_BIN_EXE_shed"))
-            .args(["--target-os", os, "powershell"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        compiler
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(source.as_bytes())
-            .unwrap();
-        let output = compiler.wait_with_output().unwrap();
+        let output = common::shed(&["--target-os", os, "powershell"], source.as_bytes());
         assert!(
             output.status.success(),
             "{}",
@@ -66,25 +54,7 @@ impl Session {
     }
 
     fn native(&self) -> PathBuf {
-        let path = self
-            .root
-            .join(format!("native_fixture{}", std::env::consts::EXE_SUFFIX));
-        let output = Command::new("rustc")
-            .arg("--edition=2024")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/native.rs"
-            ))
-            .arg("-o")
-            .arg(&path)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        path
+        common::native(&self.root)
     }
 
     fn run(&self, body: &str) -> Output {
@@ -119,38 +89,6 @@ impl Drop for Session {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
-}
-
-fn dsl(value: &str) -> String {
-    let mut out = String::from("\"");
-    for c in value.chars() {
-        out.push_str(match c {
-            '\\' => "\\\\",
-            '"' => "\\\"",
-            '$' => "\\$",
-            '\n' => "\\n",
-            '\r' => "\\r",
-            '\t' => "\\t",
-            _ => {
-                out.push(c);
-                continue;
-            }
-        });
-    }
-    out.push('"');
-    out
-}
-
-fn argv(path: impl AsRef<Path>) -> Vec<String> {
-    let bytes = fs::read(path).unwrap();
-    let mut rest = bytes.as_slice();
-    let mut args = Vec::new();
-    while !rest.is_empty() {
-        let len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
-        args.push(String::from_utf8(rest[8..8 + len].to_vec()).unwrap());
-        rest = &rest[8 + len..];
-    }
-    args
 }
 
 #[test]
