@@ -47,6 +47,13 @@ pub fn generate(nodes: &[Node], target: Target) -> String {
         },
         target,
     };
+    if target.shell == Shell::Bash {
+        emitter.out.insert_str(0, r#"if \builtin test "${BASH_VERSINFO[0]}" -lt 5 || { \builtin test "${BASH_VERSINFO[0]}" -eq 5 && \builtin test "${BASH_VERSINFO[1]}" -lt 2; }; then
+    \builtin printf '%s\n' 'shed: Bash 5.2+ required' >&2
+    \builtin return 1
+fi
+"#);
+    }
     match target.shell {
         Shell::Bash => emitter.out.push_str(
             r#"

@@ -12,6 +12,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Session {
     root: PathBuf,
     shell: &'static str,
+    executable: &'static str,
 }
 impl Session {
     fn new(shell: &'static str) -> Self {
@@ -37,7 +38,11 @@ impl Session {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        Self { root, shell }
+        Self {
+            root,
+            shell,
+            executable: shell,
+        }
     }
     fn run(
         &self,
@@ -87,15 +92,8 @@ impl Session {
                 names.join(" ")
             )
         };
-        let driver =
-            if self.shell == "bash" && cfg!(target_os = "macos") && source.contains("alias noargs")
-            {
-                format!("set -x\n{driver}")
-            } else {
-                driver
-            };
         fs::write(self.root.join("driver"), driver).unwrap();
-        let mut cmd = Command::new(self.shell);
+        let mut cmd = Command::new(self.executable);
         cmd.args(match self.shell {
             "bash" => vec!["--noprofile", "--norc"],
             "zsh" => vec!["-f"],
@@ -396,4 +394,14 @@ fn zsh_conformance() {
 #[cfg_attr(not(unix), ignore = "requires real Fish on Linux/macOS")]
 fn fish_conformance() {
     conformance("fish");
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn system_bash_is_rejected_before_effects() {
+    let mut session = Session::new("bash");
+    session.executable = "/bin/bash";
+    let (values, stderr) = session.run("set AFTER wrong\n", false, "", &["AFTER"]);
+    assert_eq!(values, [None]);
+    assert!(String::from_utf8_lossy(&stderr).contains("Bash 5.2+ required"));
 }

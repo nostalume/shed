@@ -188,6 +188,11 @@ other shells retain exact empty entries. Init uses owned temporary files,
 removed on normal success/failure; interruption can leave a `shed.*` capture in
 the target's temporary directory.
 
+Bash requires 5.2+; generated files reject older versions before DSL effects.
+On macOS, select a modern Bash explicitly: the system Bash 3.2 cannot reliably
+source process-substitution streams. CI acquires modern Bash only on its remote
+Darwin runner.
+
 CI runs the complete suite on Linux and Darwin, and PowerShell on Windows.
 It records interpreter versions and checks Rust 1.85 separately with
 `cargo check --all-targets --locked`. Shells and the minimum Rust toolchain are
