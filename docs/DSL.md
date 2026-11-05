@@ -3,9 +3,9 @@
 **Status: approved language; frontend, specialization, and all four emitters implemented.**
 This is the canonical language contract for the next shed compiler, approved on
 2026-11-04. The development checkout accepts this source grammar through `check`;
-all four backends generate the runtime contract below. Local execution covers
-Windows PowerShell and Linux Bash; Zsh/Fish have official-documentation review
-but await real-runtime conformance checks. Published 0.1.6
+all four backends generate the runtime contract below. The nine declared shell/OS
+pairs have passed real-interpreter CI under the adapter limits recorded below.
+Published 0.1.6
 binaries use the previous DSL. Compatibility with
 that DSL is not a requirement.
 The [development plan](../plans/dsl-development.md) owns implementation
@@ -397,16 +397,16 @@ target-independent. It retains semantic words, structured argument vectors,
 ordered branches, and raw contents.
 There is no legacy parser or source-directory path anchoring. PowerShell generation
 implements every statement above. Bash, Zsh, and Fish also generate every statement.
-The shared Unix suite has passed on Linux Bash 5.3.15; Zsh/Fish have documentation
-review only. Unverified target pairs remain Stage 6 work, without weakening this
-contract.
+Real-interpreter CI has passed for all declared pairs, including the approved Fish
+representability errors. Exact runtime versions and scope are recorded in the
+development plan; this does not certify arbitrary shell versions or embedded code.
 
 The PowerShell adapter requires 7.5+ for present-empty environment values.
 The Bash adapter requires 5.2+ and rejects older versions before DSL effects.
 The Fish adapter requires 4.9+; older versions are rejected before DSL effects.
-Darwin's system Bash 3.2 reads source streams using their initial file size;
+Darwin's system Bash 3.2 [reads source streams using their initial file size](https://github.com/apple-oss-distributions/bash/blob/main/bash-3.2/builtins/evalfile.c#L127);
 the implementation uses modern Bash rather than a separate legacy code-unit path.
-Ordinary literals use single quoting; Unicode single-quote characters use numeric
+PowerShell literals use single quoting; Unicode single-quote characters use numeric
 UTF-16 construction. Runtime strings are checked for NUL and invalid Unicode.
 Conditions retain explicit tree grouping. PATH uses the selected OS delimiter,
 runtime filesystem working directory, and ordinal string equality.
@@ -435,17 +435,17 @@ errors and restores the caller's error preferences on success or failure. These
 are catchable errors, not interactive-shell termination. External code that
 changes error handling or transfers control retains the boundary described above.
 
-Local PowerShell runtime evidence covers Windows with PowerShell 7.6.9. PowerShell Unix
-execution and the full target matrix remain Stage 6 work; emitting a selected
-target is not a claim that its real runtime has been verified.
+PowerShell 7.6.9 passed real-runtime CI on Windows, Linux and Darwin, including
+scalar values, native arguments, late aliases, initialization, raw code, scope,
+short-circuit errors and retained prior effects.
 
 The Unix emitters lower conditions to explicit true/false/error
 control flow, with positional parameters holding private temporary state. Bash
-and Zsh share syntax/runtime adapters; Fish uses a NUL-framed scalar/status pair
-through `string split0`. This avoids command-substitution newline trimming and
-keeps empty arguments distinct. Linux Bash passed scalar/native-argument, PATH,
-query, short-circuit, failure, alias-scope and code-unit checks. Zsh/Fish execution
-remains pending.
+and Zsh share syntax/runtime adapters. Fish collects one complete scalar without
+trimming newlines, then emits a NUL-framed scalar/status pair through `string split0`.
+This keeps empty arguments distinct and orders data before status. Bash, Zsh and
+Fish passed scalar/native-argument, PATH, query, short-circuit, failure, alias-scope
+and code-unit checks on Linux and Darwin.
 See Fish's [split0 contract](https://fishshell.com/docs/current/cmds/string-split.html).
 
 Unix queries read actual exported entries through `printenv`; they do not read
@@ -465,7 +465,9 @@ second environment store.
 Init captures bytes into a private temporary file, verifies successful exit and
 UTF-8/NUL constraints before emitting code, and sources the separate code stream
 in the loading shell. Bash/Zsh use process substitution; Fish uses a source
-pipeline. All use explicit capture cleanup on success/failure. Interruption
+pipeline. Successful captures are opened, unlinked and then streamed; failed
+captures are removed before the failure code is released. Cleanup therefore
+precedes code execution or an early failure return. Interruption before unlinking
 can leave temporary captures; no persistent runtime service is introduced.
 Official documentation review covers Zsh's
 [reserved words and command modifiers](https://zsh.sourceforge.io/Doc/Release/Shell-Grammar.html),
@@ -473,9 +475,9 @@ Official documentation review covers Zsh's
 and Fish's [substitution boundaries](https://fishshell.com/docs/current/fish_for_bash_users.html),
 [assignment status and path variables](https://fishshell.com/docs/current/cmds/set.html),
 and [current-shell source scope](https://fishshell.com/docs/current/cmds/source.html).
-This supports the adapter construction, not a claim of executed conformance.
-Stage 6 checks the remaining real-runtime behavior, including Fish PATH rejection,
-special-variable handling, source scope, and utility availability. Unix runtime
+These rules support the adapter construction; the development plan records the
+separate execution evidence, including Fish PATH rejection, special-variable
+handling, source scope, and utility availability. Unix runtime
 utilities are resolved in `/usr/bin`, then `/bin`, independently of DSL PATH.
 
 The frontend reports source-located capacity errors rather than overflowing the

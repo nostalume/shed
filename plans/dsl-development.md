@@ -1,6 +1,7 @@
 # Next DSL development plan
 
-Status: Stages 1–5 implemented; Stage 6 matrix verification is in progress.
+Status: Stages 1–6 implemented and verified on 2026-11-05 under the runtime
+baselines and Fish representability boundary recorded below.
 Canonical contract: [DSL specification](../docs/DSL.md).
 Baseline: HEAD `424ff73`, package 0.1.6, inspected 2026-11-04, with existing
 uncommitted toolchain/documentation changes. This is the user-requested,
@@ -405,23 +406,24 @@ PowerShell Unix, and Darwin, including scope, PATH, native slots and cleanup.
 
 ## Stage 6: The declared matrix and public interface agree
 
-Status: in progress on 2026-11-05. Stage 5's deferred Zsh/Fish execution is included.
+Status: implemented and verified on 2026-11-05, including Stage 5's deferred
+Zsh/Fish execution. No package release or merge to main was made.
 Primary owners: `.github/workflows/ci.yml`, `src/main.rs`, user/contributor docs,
 and package metadata only where the actual interface change requires it.
 
-- [ ] Execute the shared Zsh/Fish suites on isolated Linux CI, then conformance
+- [x] Execute the shared Zsh/Fish suites on isolated Linux CI, then conformance
   cases on every remaining declared shell/OS pair. Required target
   jobs must not silently skip unavailable shells or discard parser diagnostics.
 - [x] Test real CLI file/stdin/error paths and canonical target admission. Keep
   script stdout separate from compiler diagnostics; verify no partial output.
-- [ ] Verify scalar codecs and native argument transfer separately; record the
+- [x] Verify scalar codecs and native argument transfer separately; record the
   tested shell versions and launch protocol without claiming arbitrary program
   argument parsers are identical.
-- [ ] Update README, CLI help, description/examples, and affected release guidance
+- [x] Update README, CLI help, description/examples, and affected release guidance
   to the implemented language; remove the pending-language notice only when true.
-- [ ] Preserve the current Rust minimum declaration only with suitable evidence;
+- [x] Preserve the current Rust minimum declaration only with suitable evidence;
   any proposed minimum change is a separate explicit compatibility decision.
-- [ ] Run the project checks below and inspect the final diff for obsolete
+- [x] Run the project checks below and inspect the final diff for obsolete
   source/word/path assumptions, new unsupported promises, and unrelated changes.
 
 Completion evidence: a coverage table identifies each target pair, runtime
@@ -430,15 +432,17 @@ behavioral counterexamples pass; unavailable jobs or failed adapter guarantees
 remain incomplete work. Syntax-only or finite-model success does not substitute
 for target execution.
 
-Implementation prepared: one three-OS CI matrix runs the existing complete suite,
+Implementation: one three-OS CI matrix runs the complete suite,
 records native versions, checks examples and builds release binaries. Linux owns
 formatting/Clippy; a separate isolated Rust 1.85 job checks all targets without
 changing the minimum declaration. Existing Ubuntu/Windows check names are kept.
 The workflow uses a read-only token, does not persist checkout credentials, and
 bounds/cancels stale runs. Small dependency-free builds no longer use a remote
 cache action. Checkout v7.0.1 and the Rust toolchain action are pinned to exact
-commits resolved from their official repositories on 2026-11-05; Dependabot's
-existing Actions entry remains in place. No release workflow is invoked.
+commits resolved from their official repositories on 2026-11-05:
+[checkout](https://github.com/actions/checkout/tree/3d3c42e5aac5ba805825da76410c181273ba90b1)
+and [rust-toolchain](https://github.com/dtolnay/rust-toolchain/tree/b725eda525362e7cf34af9a7243cac1e3f01a7ec).
+Dependabot's existing Actions entry remains in place. No release workflow ran.
 
 Unix scalar codecs now have independent real-interpreter checks over the same
 12,720 strings used for native argv. The native-slot witness avoids `typeset -g`,
@@ -449,18 +453,61 @@ observed coverage. Package metadata uses the canonical PowerShell name.
 
 Local Windows checks passed: 26 tests, six explicitly ignored Unix tests,
 Rustfmt, Clippy with warnings denied, and release build on Rust/Cargo 1.99.1.
-The [first CI run](https://github.com/nostalume/shed/actions/runs/41942238703)
-passed Rust 1.85, the Unix codecs, Linux Bash/Zsh, and PowerShell on Unix. It
-exposed Fish's forced empty-PATH normalization and test assumptions about
-Darwin symlinks/Windows short paths. The user approved rejecting unrepresentable
-Fish PATH values before mutation, preserving the existing PATH and the common
-DSL rules. The adapter now has a preflight check and tests for all four empty-entry
-positions. Unix helper utilities use fixed system directories so older Bash
-cannot substitute `command -p`'s default PATH into environment queries.
-Test cwd expectations follow the actual provider/physical directory; executable
-selection checks compare canonical file identity. `.gitattributes` fixes shell
-scripts to LF, including Windows checkouts used through WSL. Final matrix rerun
-is pending; the first run is failure evidence, not full acceptance.
+Existing WSL Bash 5.3.15 also passed its codec/behavioral suites and six CLI tests
+using the existing Rust 1.97.1 process override. No local tools were installed.
+
+The [successful CI run](https://github.com/nostalume/shed/actions/runs/41952120266)
+executed a `push` of source snapshot `10a12409a3b439cdeb2d5cb549919b79253a25fa`
+on `codex/dsl-stage6-20261105`. All four jobs passed:
+
+| OS / CPU | Shell | Observed version | Runtime checks | Result |
+| --- | --- | --- | --- | --- |
+| Linux / x86_64 | Bash | 5.2.21 | Independent scalar codec and shared Unix suite | Pass |
+| Linux / x86_64 | Zsh | 5.9 | Independent scalar codec and shared Unix suite | Pass |
+| Linux / x86_64 | Fish | 4.9.3 | Independent scalar codec, shared Unix suite and PATH rejection | Pass |
+| Linux / x86_64 | PowerShell | 7.6.9 | Scalar codec and native state/command/code-unit suites | Pass |
+| Darwin / aarch64 | Bash | 5.3.20 | Independent scalar codec, shared Unix suite and system-Bash rejection | Pass |
+| Darwin / aarch64 | Zsh | 5.9 | Independent scalar codec and shared Unix suite | Pass |
+| Darwin / aarch64 | Fish | 4.9.3 | Independent scalar codec, shared Unix suite and PATH rejection | Pass |
+| Darwin / aarch64 | PowerShell | 7.6.9 | Scalar codec and native state/command/code-unit suites | Pass |
+| Windows / x86_64 | PowerShell | 7.6.9 | Scalar codec and native state/command/code-unit suites | Pass |
+
+The runtime jobs used Rust/Cargo 1.99.1. Linux passed 32 tests with no ignores;
+Darwin passed 33 with no ignores; Windows passed 26, with six Unix-only tests
+explicitly ignored. All three passed release builds and file/stdin example checks;
+Linux also passed Rustfmt, Clippy and release-helper syntax checks. The separate
+Rust 1.85.0 job passed `cargo check --all-targets --locked`; the declared minimum
+is retained. YAML was parsed locally with existing tools; actionlint was absent
+and was not installed. The hosted run supplies the workflow execution evidence.
+
+Concrete corrections and boundaries established by execution:
+
+- Native Fish normalizes empty PATH entries to `.`. The user approved explicit
+  rejection before mutation instead; tests cover empty, leading, trailing and
+  middle empty entries, unchanged PATH, retained prior effects and skipped later
+  statements. Other backends keep the common exact-entry rules.
+- Bash 3.2's source implementation reads the initial file size and cannot consume
+  these streams reliably. The runtime baseline is Bash 5.2+; Darwin CI selects
+  modern Bash and tests that the system Bash rejects the load before effects.
+  Fish 3.7 also exposed capture ordering failures; the supported baseline is
+  Fish 4.9+. Linux CI uses the official 4.9.3 standalone archive and verifies its
+  published SHA256; Darwin uses Homebrew. Acquisition stays on disposable runners.
+- Fish collects output completely before emitting one scalar/status frame.
+  UTF-8 validation precedes scalar emission. No legacy adapter or second
+  environment store was introduced.
+- Successful init captures are opened and unlinked before streaming; failed
+  captures are removed before emitting a failure return. This removes the race
+  between loader return and producer cleanup. Interruption before unlinking can
+  still leave a capture, as documented by the external-code boundary.
+- Utilities use `/usr/bin`, then `/bin`, independently of DSL PATH. Test cwd
+  expectations use the actual physical/provider directory, and executable
+  selection compares canonical file identity, handling Darwin symlinks and
+  Windows short paths. `.gitattributes` fixes shell scripts to LF for WSL use.
+
+These results cover the declared shell/OS pairs at the observed versions and CPU
+lanes. They do not prove every version, architecture, arbitrary native argument
+parser, or embedded program. The validation branch contains isolated snapshots;
+the local main ref and original staging area were preserved.
 
 ## Validation and execution boundaries
 
@@ -477,16 +524,15 @@ Add a focused check with the implementation whose semantic claim needs it; do no
 create a separate permanent test project merely to copy the earlier experiment.
 No new Rust test dependency is selected by this plan.
 
-Local runtime verification covers Windows PowerShell and WSL Bash. The user
-prefers official-documentation review over local Zsh/Fish installation. Those
-runtime tests and the full OS matrix remain unexecuted; configured Ubuntu CI
-acquires shells only on its disposable runner. This plan does not authorize
-local tool installation, a remote workflow run, or a release workflow.
+Local verification uses existing Windows PowerShell and WSL Bash. Stage 6's remote
+matrix ran on an explicitly approved validation branch; missing runtimes were
+acquired only on disposable hosted runners. This plan does not independently
+authorize local installation, additional remote work, or a release.
 
 ## Readiness, recovery, and reopening
 
-Stage 6 is in progress under the revised Stage 5 scope. Capture exact backend failures
-when they arise; a probe may select a private implementation, but cannot weaken
+Stages 1–6 are complete within the recorded runtime and representability bounds.
+Capture exact backend failures when they arise; a probe may select a private implementation, but cannot weaken
 the approved contract. If none can meet it, reopen only the affected target or
 operation before changing the specification.
 

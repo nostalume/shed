@@ -5,9 +5,9 @@
 A small compiler for shell environment declarations, with no third-party Rust
 dependencies. The development checkout implements the
 [next DSL](docs/DSL.md): source validation, conservative target specialization,
-and generation for PowerShell, Bash, Zsh, and Fish. Local runtime checks cover
-Windows PowerShell and Linux Bash. Zsh/Fish have been reviewed against their
-official documentation; their real-runtime checks remain pending.
+and generation for PowerShell, Bash, Zsh, and Fish. CI has verified all nine
+declared shell/OS pairs across Linux, Darwin, and Windows. See the
+[tested versions and scope](plans/dsl-development.md#stage-6-the-declared-matrix-and-public-interface-agree).
 
 Published 0.1.6 binaries use the previous DSL. The examples below belong to the
 development checkout; build from source to use this language.
@@ -58,7 +58,7 @@ cd shed
 cargo install --locked --path .
 ```
 
-The project uses Rust 2024. `Cargo.toml` declares Rust 1.85 as the minimum;
+The project uses Rust 2024. CI checks the declared Rust 1.85 minimum;
 [`rust-toolchain.toml`](rust-toolchain.toml) pins Rust 1.99.1, including Cargo,
 Rustfmt, and Clippy, for development and CI. With rustup, entering the checkout
 selects the pinned toolchain. Prebuilt binaries do not require Rust.
@@ -142,11 +142,10 @@ errors stop the load with a catchable error; earlier environment changes remain.
 Aliases expand their structured words at invocation, preserve native stdout in
 the pipeline and `$LASTEXITCODE`, and throw on nonzero native exit.
 
-Windows execution was verified with PowerShell 7.6.9. PowerShell on Linux/Darwin
-still needs matrix verification. Bash 5.3.15 passed the shared Unix suite on Linux,
-including 12,720 scalar/native-argument roundtrips. Zsh/Fish documentation review
-does not establish real-runtime conformance; those runs and Darwin remain pending.
-See the [development stages](plans/dsl-development.md) for measured coverage.
+PowerShell 7.6.9 passed on Windows, Linux and Darwin. Bash, Zsh and Fish passed on
+Linux and Darwin. Each Unix backend has separate 12,720-string scalar-codec and
+native-argument checks. See the [development stages](plans/dsl-development.md)
+for runtime versions, rejected values and the limits of this evidence.
 
 For Bash, compile to a file and source it after successful compilation:
 
@@ -189,7 +188,7 @@ removed on normal success/failure; interruption can leave a `shed.*` capture in
 the target's temporary directory.
 
 Bash requires 5.2+; generated files reject older versions before DSL effects.
-Fish requires 4.9+; older versions do not preserve the adapter's capture ordering.
+Fish requires 4.9+, the validated runtime baseline.
 On macOS, select a modern Bash explicitly: the system Bash 3.2 cannot reliably
 source process-substitution streams. CI acquires modern Bash only on its remote
 Darwin runner.

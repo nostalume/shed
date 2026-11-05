@@ -58,11 +58,13 @@ not a workflow. It checks Cargo monthly and GitHub Actions weekly.
 CI and release builds pin the same toolchain as local development. CI requires
 PowerShell 7.5+ for real generated-script, scalar-codec, and native-argument tests;
 it fails when the interpreter is absent rather than silently skipping them.
-The checkout configures Ubuntu, Windows and Darwin jobs; local execution has verified
-Windows PowerShell and Linux Bash, not those remote job results. Ubuntu installs Zsh/Fish and runs
-the required Unix suite; it fails on missing shells. These configured jobs have
-not run for the Stage 6 revision yet. Zsh/Fish have official-documentation review;
-execution and minimum-Rust results are recorded in [Stage 6](../plans/dsl-development.md).
+The [Stage 6 CI run](https://github.com/nostalume/shed/actions/runs/41952120266)
+passed Ubuntu, Windows, Darwin and the Rust 1.85 compile check. Unix jobs require
+Bash 5.2+, Zsh and Fish 4.9+; unavailable interpreters fail their required suites.
+Linux obtains a checksum-verified official Fish binary, and Darwin obtains modern
+Bash/Fish through Homebrew, only on disposable runners. The tested versions and
+adapter limits are recorded in [Stage 6](../plans/dsl-development.md).
+This validation run does not invoke a release or publish a package.
 
 The two post-release update workflows push independently. Verify that both
 commits reach `main`; simultaneous updates can require resolving a failed push.
