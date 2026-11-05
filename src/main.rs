@@ -3,8 +3,6 @@ mod emit;
 mod lexer;
 mod parser;
 mod prune;
-#[cfg(test)]
-mod tests;
 
 use ast::{Os, Shell, Target};
 use std::{

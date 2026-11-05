@@ -200,8 +200,11 @@ CI runs the complete suite on Linux and Darwin, and PowerShell on Windows.
 It records interpreter versions and checks Rust 1.85 separately with
 `cargo check --all-targets --locked`. Shells and the minimum Rust toolchain are
 acquired only on disposable hosted runners.
-The same CI builds all five release artifacts, verifies the Scoop/Nix updater and
-installs the Linux artifact through the Nix derivation on a disposable runner.
+Release invokes these checks, then builds all five release artifacts, verifies
+the Scoop/Nix catalogs and installs the Linux artifact through the Nix derivation
+on a disposable runner. Its manual validation entry runs the same checks and
+builds without publishing; ordinary CI keeps the three-system tests and Rust
+minimum check.
 Release helpers leave live package catalog versions/hashes intact until the new
 assets exist; one post-release update advances both catalogs together.
 

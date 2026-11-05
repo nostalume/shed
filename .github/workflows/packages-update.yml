@@ -39,7 +39,7 @@ jobs:
       - name: Verify all assets and update both catalogs
         env:
           TAG: ${{ github.event.workflow_run.head_branch }}
-        run: python3 scripts/update-packages.py "$TAG"
+        run: python3 scripts/update_packages.py "$TAG"
       - name: Commit both catalogs together
         env:
           TAG: ${{ github.event.workflow_run.head_branch }}

@@ -45,8 +45,8 @@ no effect.
 
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
-| `ci.yml` | Main/master/codex pushes, main/master PRs, manual, reusable call | Real-shell matrix, Rust minimum, five release builds, catalog tests and a native Nix consumer check. |
-| `release.yml` | A `v*` tag | Reuse CI, then publish those exact checked artifacts with a job-scoped write token. |
+| `ci.yml` | Main/master/codex pushes, main/master PRs, manual, reusable call | Three-system tests, Rust minimum and packaging-tool unit tests. |
+| `release.yml` | A `v*` tag or manual validation | Reuse CI, build five variants, verify catalogs and a native Nix consumer; only a tag push publishes those checked artifacts. |
 | `packages-update.yml` | A successful tag-triggered Release run | Verify the source/tag binding and all published assets; update Scoop and Nix in one commit. |
 
 Remote actions are pinned to commits and covered by the existing Dependabot
@@ -55,6 +55,20 @@ The release publisher receives write access only after the checks complete.
 Release tags must be stable numeric versions matching the Cargo package version.
 The publisher verifies checksums again and uses `gh release create --verify-tag`;
 an existing release causes an error rather than silently replacing its assets.
+
+Ordinary CI has four jobs: three native test lanes and the Rust minimum. The
+five-target build matrix and Nix consumer check run in Release, keeping routine
+pushes and PRs focused on tests. To check the full distribution before tagging:
+
+```sh
+gh workflow run release.yml --ref main
+```
+
+Select another branch with `--ref BRANCH` when validating workflow changes. The
+workflow must exist on the default branch for GitHub to accept manual dispatch.
+Manual runs skip the publish job even when the selected ref is a tag; they do not
+update package catalogs. CI concurrency distinguishes the calling workflow and
+ref, so this run does not cancel ordinary CI. Publication retains its own queue.
 
 | Rust target | Binary |
 | --- | --- |
@@ -65,14 +79,14 @@ an existing release causes an error rather than silently replacing its assets.
 | `x86_64-pc-windows-msvc` | `shed-windows-x86_64.exe` |
 
 Each binary has a matching `.sha256` file containing its digest and exact basename.
-CI builds all five variants. Its Nix consumer check installs the just-built Linux
+Release builds all five variants. Its Nix consumer check installs the just-built Linux
 x86_64 binary, checks its version and checks the DSL example. Cross-compilation
 does not certify execution on every CPU, and this does not perform a real Scoop
 installation or publish a package.
 
 ## Scoop and Nix catalogs
 
-[scripts/update-packages.py](../scripts/update-packages.py) owns both catalogs.
+[scripts/update_packages.py](../scripts/update_packages.py) owns both catalogs.
 It validates the version, downloads all five binaries and sidecars, checks every
 digest and basename, then renders both files before writing either. A missing,
 corrupt or mismatched asset stops the update. An older delayed release is ignored;
@@ -96,13 +110,13 @@ main commit can still reject a push; rerun after inspecting the remote state.
 Manual verification/update, after the release exists:
 
 ```sh
-python3 scripts/update-packages.py 0.2.0
+python3 scripts/update_packages.py 0.2.0
 ```
 
 For already downloaded assets:
 
 ```sh
-python3 scripts/update-packages.py 0.2.0 --assets-dir dist
+python3 scripts/update_packages.py 0.2.0 --assets-dir dist
 ```
 
 Inspect the two-file diff before committing it. Where Nix is already available:

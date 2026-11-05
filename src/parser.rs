@@ -5,6 +5,9 @@ use crate::lexer::{Token, identifier, lex};
 use std::iter::Enumerate;
 use std::str::SplitInclusive;
 
+#[cfg(test)]
+mod tests;
+
 // Bound recursive construction and subsequent AST destruction on the main stack.
 const PARSE_LIMIT: usize = 128;
 

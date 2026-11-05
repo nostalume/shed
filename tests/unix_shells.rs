@@ -1,10 +1,11 @@
 //! The same DSL cases and native witness run in each real Unix shell.
 //! Windows reports these tests as ignored; it does not certify Unix adapters.
+mod common;
+use common::{arguments, quote, take_string};
 use std::{
     fs,
-    io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -24,20 +25,7 @@ impl Session {
         fs::create_dir_all(root.join("captures")).unwrap();
         // Match the physical cwd used by Unix path operations (e.g. Darwin /var).
         let root = fs::canonicalize(root).unwrap();
-        let out = Command::new("rustc")
-            .args([
-                "--edition=2024",
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/native.rs"),
-                "-o",
-            ])
-            .arg(root.join("native_fixture"))
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        common::native(&root);
         Self {
             root,
             shell,
@@ -56,20 +44,7 @@ impl Session {
         } else {
             "linux"
         };
-        let mut compile = Command::new(env!("CARGO_BIN_EXE_shed"))
-            .args(["--target-os", os, self.shell])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        compile
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(source.as_bytes())
-            .unwrap();
-        let result = compile.wait_with_output().unwrap();
+        let result = common::shed(&["--target-os", os, self.shell], source.as_bytes());
         assert!(
             result.status.success(),
             "{}",
@@ -147,33 +122,6 @@ impl Drop for Session {
         let _ = fs::remove_dir_all(&self.root);
     }
 }
-fn take_string(rest: &mut &[u8]) -> String {
-    let len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
-    let result = String::from_utf8(rest[8..8 + len].to_vec()).unwrap();
-    *rest = &rest[8 + len..];
-    result
-}
-fn arguments(file: PathBuf) -> Vec<String> {
-    let bytes = fs::read(file).unwrap();
-    let mut rest = bytes.as_slice();
-    let mut values = Vec::new();
-    while !rest.is_empty() {
-        values.push(take_string(&mut rest));
-    }
-    values
-}
-fn quote(text: &str) -> String {
-    format!(
-        "\"{}\"",
-        text.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('$', "\\$")
-            .replace('\r', "\\r")
-            .replace('\n', "\\n")
-            .replace('\t', "\\t")
-    )
-}
-
 fn values_paths_queries_and_precedence(shell: &'static str) {
     let s = Session::new(shell);
     fs::write(s.root.join("[literal]"), "").unwrap();

@@ -3,10 +3,9 @@ use crate::ast::*;
 use std::fmt::Write;
 
 #[cfg(test)]
-#[path = "unix_tests.rs"]
 mod tests;
 
-pub fn validate(nodes: &[Node], shell: Shell) -> Result<(), String> {
+pub fn reserved_alias(name: &str, shell: Shell) -> bool {
     let reserved = match shell {
         Shell::Bash => {
             "case coproc do done elif else esac fi for function if in select then time until while builtin"
@@ -19,37 +18,15 @@ pub fn validate(nodes: &[Node], shell: Shell) -> Result<(), String> {
         }
         Shell::Powershell => unreachable!(),
     };
-    for node in nodes {
-        match &node.kind {
-            Statement::Alias { name, .. }
-                if name.starts_with("__shed_")
-                    || reserved.split_whitespace().any(|keyword| keyword == name) =>
-            {
-                return Err(format!(
-                    "line {}, column {}: reserved {} alias name {name:?}",
-                    node.at.line,
-                    node.at.column,
-                    shell.name()
-                ));
-            }
-            Statement::If(branch) => {
-                for (_, body) in &branch.branches {
-                    validate(body, shell)?;
-                }
-                validate(&branch.otherwise, shell)?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+    name.starts_with("__shed_") || reserved.split_whitespace().any(|keyword| keyword == name)
 }
 
 pub fn generate(nodes: &[Node], target: Target) -> String {
     let mut emitter = Emitter {
         out: if target.shell == Shell::Fish {
-            include_str!("unix.fish").to_owned()
+            include_str!("unix/fish.fish").to_owned()
         } else {
-            include_str!("unix.sh").to_owned()
+            include_str!("unix/common.sh").to_owned()
         },
         target,
     };
@@ -101,6 +78,19 @@ __shed_nul_free() {
 struct Emitter {
     out: String,
     target: Target,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordUse {
+    Statement,
+    Initializer,
+    Condition,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandUse {
+    Alias,
+    Initializer,
 }
 
 impl Emitter {
@@ -202,7 +192,7 @@ impl Emitter {
         self.failure(at);
         self.close_if();
     }
-    fn push_word(&mut self, word: &Word, init: bool, condition: bool) {
+    fn push_word(&mut self, word: &Word, context: WordUse) {
         let encoded = if let Some(text) = word.literal() {
             if self.fish() {
                 format!("{} 0", self.quote(text))
@@ -239,20 +229,22 @@ impl Emitter {
             )
             .unwrap();
         }
-        if init {
+        if context == WordUse::Initializer {
             self.line(
                 "\\builtin printf 'return 1\\n'",
                 "builtin printf 'return 1\\n'",
             );
         }
-        if condition {
+        if context == WordUse::Condition {
             self.return_value(2);
         } else {
             self.failure(word.at);
         }
         self.line(";; esac", "end");
     }
-    fn command_body(&mut self, command: &Command, init: bool, caller: bool) {
+    fn command_body(&mut self, command: &Command, context: CommandUse) {
+        let init = context == CommandUse::Initializer;
+        let caller = context == CommandUse::Alias;
         let values: Option<Vec<_>> = std::iter::once(&command.program)
             .chain(&command.args)
             .map(|value| value.literal().map(|text| self.quote(text)))
@@ -273,7 +265,14 @@ impl Emitter {
             return;
         }
         for value in std::iter::once(&command.program).chain(&command.args) {
-            self.push_word(value, init, false);
+            self.push_word(
+                value,
+                if init {
+                    WordUse::Initializer
+                } else {
+                    WordUse::Statement
+                },
+            );
         }
         let n = command.args.len() + 1;
         let values = (1..=n)
@@ -314,7 +313,7 @@ impl Emitter {
             }
             Cond::Env(name) => self.query(&format!("__shed_env_truth {}", self.quote(name))),
             Cond::Have(value) | Cond::Exists(value) => {
-                self.push_word(value, false, true);
+                self.push_word(value, WordUse::Condition);
                 self.query(&format!(
                     "{} {}",
                     if matches!(cond, Cond::Have(_)) {
@@ -404,7 +403,7 @@ impl Emitter {
                     }
                     self.line("if", "if begin");
                     self.open_function(name);
-                    self.command_body(command, false, true);
+                    self.command_body(command, CommandUse::Alias);
                     self.end_function();
                     self.line("then", "end");
                     self.line("\\builtin true", "builtin true");
@@ -414,13 +413,13 @@ impl Emitter {
                 }
                 Statement::Init(command) => {
                     self.open_function("__shed_initializer");
-                    self.command_body(command, true, false);
+                    self.command_body(command, CommandUse::Initializer);
                     self.end_function();
                     self.code_unit("__shed_initializer", node.at);
                 }
                 Statement::Set { value, .. } | Statement::Path { value, .. } => {
                     self.open_function("__shed_statement");
-                    self.push_word(value, false, false);
+                    self.push_word(value, WordUse::Statement);
                     let call = match &node.kind {
                         Statement::Set { name, .. } => {
                             format!("__shed_set {} {}", self.quote(name), self.decoded(1))
