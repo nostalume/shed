@@ -87,16 +87,13 @@ impl Session {
                 names.join(" ")
             )
         };
-        let driver = if self.shell == "fish" {
-            format!("builtin set -g fish_trace 1\n{driver}")
-        } else if self.shell == "bash"
-            && cfg!(target_os = "macos")
-            && source.contains("alias noargs")
-        {
-            format!("set -x\n{driver}")
-        } else {
-            driver
-        };
+        let driver =
+            if self.shell == "bash" && cfg!(target_os = "macos") && source.contains("alias noargs")
+            {
+                format!("set -x\n{driver}")
+            } else {
+                driver
+            };
         fs::write(self.root.join("driver"), driver).unwrap();
         let mut cmd = Command::new(self.shell);
         cmd.args(match self.shell {

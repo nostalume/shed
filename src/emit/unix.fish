@@ -19,14 +19,21 @@ function __shed_system
         command /bin/$argv[1] $argv[2..-1]
     end
 end
+function __shed_text
+    builtin string match -q -r '\x00' -- "$argv[1]"; and builtin return 2
+    # Validate separately; older Fish can interleave a pipeline's bytes with the
+    # caller's capture suffix. Only a completed builtin emits the scalar itself.
+    builtin printf '%s' "$argv[1]" | __shed_system iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+    or builtin return 2
+    builtin printf '%s' "$argv[1]"
+end
 function __shed_env
     # argv is Fish's intrinsic argument slot, not a normal environment binding.
     builtin test "$argv[1]" != argv; or builtin return 2
     builtin set argv (__shed_capture __shed_system printenv "$argv[1]" 2>/dev/null | builtin string split0)
     switch "$argv[2]"
         case 0
-            builtin printf '%s' (builtin string split -r -m1 -f1 \n -- "$argv[1]") | __shed_system iconv -f UTF-8 -t UTF-8 2>/dev/null
-            or builtin return 2
+            __shed_text (builtin string split -r -m1 -f1 \n -- "$argv[1]")
         case 1
             builtin return 1
         case '*'
@@ -38,8 +45,7 @@ function __shed_home
     if not builtin string match -q '/*' -- "$HOME"; or not builtin test -d "$HOME"
         builtin return 2
     end
-    builtin printf '%s' "$HOME" | __shed_system iconv -f UTF-8 -t UTF-8 2>/dev/null
-    or builtin return 2
+    __shed_text "$HOME"
 end
 function __shed_word
     while builtin test (builtin count $argv) -gt 0
@@ -71,11 +77,10 @@ function __shed_absolute
     builtin set argv "$argv[1]" (builtin string split -r -m1 -f1 \n -- "$argv[2]")
     builtin test -n "$argv[2]"; or builtin return 2
     if builtin test "$argv[2]" = /
-        builtin printf '/%s' "$argv[1]"
+        __shed_text /"$argv[1]"
     else
-        builtin printf '%s/%s' "$argv[2]" "$argv[1]"
-    end | __shed_system iconv -f UTF-8 -t UTF-8 2>/dev/null
-    or builtin return 2
+        __shed_text "$argv[2]/$argv[1]"
+    end
 end
 function __shed_exists
     builtin test -n "$argv[1]"; or builtin return 1
