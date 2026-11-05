@@ -172,7 +172,7 @@ fn values_paths_queries_and_precedence(shell: &'static str) {
     let s = Session::new(shell);
     fs::write(s.root.join("[literal]"), "").unwrap();
     let value = "a '\"`$;|&<>[]*?#‘’‚‛🙂\r\n\t\\end\\";
-    let gap = if shell == "fish" { ":" } else { "::" };
+    let gap = if shell == "fish" { ":.:" } else { "::" };
     let mut source = format!(
         "set VALUE {}\nset EMPTY ''\nset GONE gone\nunset GONE\nset COPY \"${{env:LOCAL_ONLY}}\"\nset SHELL \"${{shell}}\"\nset PATH \"old{gap}${{env:ROOT}}/missing:OLD\"\npath+ missing\npath+ missing\npath- missing\npath- missing\nif have native_fixture and not have cd and not have 'native_*' and exists '[literal]' and not exists '*'\nset QUERIES yes\nend\n",
         quote(value)

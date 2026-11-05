@@ -237,10 +237,16 @@ function __shed_init
     end
     builtin set argv (builtin string split -r -m1 -f1 \n -- "$argv[1]") $argv[3..-1]
     if __shed_run $argv[2..-1] > "$argv[1]"; and __shed_valid_file "$argv[1]"
-        __shed_system cat "$argv[1]"; or builtin printf '\nreturn 1\n'
+        begin
+            if __shed_system rm -f -- "$argv[1]"
+                __shed_system cat; or builtin printf '\nreturn 1\n'
+            else
+                builtin printf 'return 1\n'
+            end
+        end < "$argv[1]"
     else
+        __shed_system rm -f -- "$argv[1]"
         builtin printf '%s\n' 'shed: initializer failed or emitted invalid text' >&2
         builtin printf 'return 1\n'
     end
-    __shed_system rm -f -- "$argv[1]"; or builtin printf '\nreturn 1\n'
 end

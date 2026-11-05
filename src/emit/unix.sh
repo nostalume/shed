@@ -143,16 +143,20 @@ __shed_valid_file() (
         { __shed_system tr -d '\000' < "$1" | __shed_system cmp -s "$1" -; }
 )
 __shed_init() (
-    # This subshell owns its capture file; both completion paths remove it.
+    # Open the validated capture, unlink it, then hand its bytes to the loader.
     \builtin set -- "$(__shed_capture __shed_system mktemp "${TMPDIR:-/tmp}/shed.XXXXXXXXXX")" "$@"
     case "$1" in *0) ;; *) \builtin printf 'return 1\n'; \builtin return 1;; esac
     \builtin set -- "${1%?}" "${@:2}"
     \builtin set -- "${1%?}" "${@:2}"
     if __shed_run "${@:2}" > "$1" && __shed_valid_file "$1"; then
-        __shed_system cat "$1" || \builtin printf '\nreturn 1\n'
+        if __shed_system rm -f -- "$1"; then
+            __shed_system cat || \builtin printf '\nreturn 1\n'
+        else
+            \builtin printf 'return 1\n'
+        fi < "$1"
     else
+        __shed_system rm -f -- "$1" || \builtin true
         \builtin printf '%s\n' 'shed: initializer failed or emitted invalid text' >&2
         \builtin printf 'return 1\n'
     fi
-    __shed_system rm -f -- "$1" || \builtin printf '\nreturn 1\n'
 )
