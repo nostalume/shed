@@ -1,4 +1,5 @@
 /target
+/plans/
 .env
 .agents/
 __pycache__/

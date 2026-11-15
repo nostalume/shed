@@ -11,20 +11,36 @@ use std::{
     process,
 };
 
-const USAGE: &str = "\
-shed — Shell Environment Declaration
+const HELP: &str = "\
+shed — Compile shell environment declarations
 
-USAGE
-  shed [--target-os OS] check [file]
-  shed [--target-os OS] <shell> [file]
+Usage
+  shed check [FILE]
+  shed [--target-os OS] SHELL [FILE]
 
-Omit file to read stdin. check validates the DSL without executing it.
-Shells: bash, zsh, fish, powershell
-OS names: linux, darwin, windows
+Commands
+  check    Validate without executing. Write a summary to stdout.
+  SHELL    Generate a script and write it to stdout.
 
-Requires PowerShell 7.5+, Bash 5.2+, or Fish 4.9+. Unix shells target Linux/Darwin.
-Fish rejects PATH values containing empty entries before mutation.
-See docs/DSL.md for the language specification.
+Input and output
+  Read UTF-8 declarations from FILE, or from stdin if FILE is omitted.
+  Use > to save the generated script to a separate file.
+  Errors are written to stderr.
+
+Targets
+  bash (5.2+), zsh, fish (4.9+)    Linux and macOS
+  powershell (7.5+)                Linux, macOS, and Windows
+  Fish rejects PATH values containing empty entries.
+
+Options
+  --target-os OS   linux, darwin, or windows (default: host OS).
+  -h, --help       Show this help.
+  -V, --version    Show the version.
+
+Examples
+  shed check config.shed
+  shed bash config.shed > env.sh
+  shed --target-os windows powershell config.shed > env.ps1
 ";
 
 fn read(file: Option<&str>) -> Result<String, String> {
@@ -42,7 +58,7 @@ fn read(file: Option<&str>) -> Result<String, String> {
 
 fn run(mut args: impl Iterator<Item = String>) -> Result<String, String> {
     let Some(mut command) = args.next() else {
-        return Ok(USAGE.to_owned());
+        return Ok(HELP.to_owned());
     };
     let mut os = None;
     if command == "--target-os" {
@@ -60,7 +76,7 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<String, String> {
         .map(|name| Os::parse(name).ok_or_else(|| format!("unknown target OS {name:?}")))
         .transpose()?;
     if matches!(command.as_str(), "--help" | "-h") {
-        return Ok(USAGE.to_owned());
+        return Ok(HELP.to_owned());
     }
     if matches!(command.as_str(), "--version" | "-V") {
         return Ok(format!("shed {}\n", env!("CARGO_PKG_VERSION")));

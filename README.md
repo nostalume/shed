@@ -126,6 +126,10 @@ The installer verifies the binary checksum and installs to `~/.local/bin`, or
 Canonical target names are `bash`, `zsh`, `fish`, and `powershell`. The
 [specification](docs/DSL.md#targets) defines the supported target pairs.
 
+The optional file argument is the declaration source. Omit it to read from
+stdin. Compilation writes the generated script to stdout and reports errors on
+stderr. Redirect stdout with `>` to save the script to a separate file.
+
 The PowerShell backend implements all DSL statements and requires PowerShell
 7.5 or later. From a PowerShell session, compile to a file and load it only after
 successful compilation:
