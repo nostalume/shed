@@ -1,13 +1,13 @@
 { lib, stdenv, fetchurl }:
 
 let
-  version = "0.2.0";
+  version = "0.2.1";
 
   sources = {
-    "x86_64-linux"  = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-x86_64";  hash = "sha256-5Fctt2gIZJUB2D4M7lhhUDnR7Fj5MMiPmvQ9grSXLzc="; }; # x86_64-linux
-    "aarch64-linux" = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-aarch64"; hash = "sha256-nW6EsFyjgIboU9AiC9g1F0NYQvQzNBa61u1bv6lakKM="; }; # aarch64-linux
-    "x86_64-darwin" = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-x86_64";  hash = "sha256-viWrl2+b8tIzR+NCs0JPskmD1EoKiRcVtdxxCSpDZeU="; }; # x86_64-darwin
-    "aarch64-darwin"= { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-aarch64"; hash = "sha256-evLHMyC4m58f0oo2P9gY+XqVkOR/3WrYMDFWt/Z0+TI="; }; # aarch64-darwin
+    "x86_64-linux"  = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-x86_64";  hash = "sha256-/o9YDC1NchXltfMmS3zlBmP1u/s4ytPJvuq/+Cl8fE8="; }; # x86_64-linux
+    "aarch64-linux" = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-linux-aarch64"; hash = "sha256-Vl8EtT46Z5C1qWFr+0F6kdUj0Dfw7YAWSffBZAOMDmc="; }; # aarch64-linux
+    "x86_64-darwin" = { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-x86_64";  hash = "sha256-wPKc3pvO457NYfIJ+lwCprybFbq3Z1sOe6H4m9PMFn8="; }; # x86_64-darwin
+    "aarch64-darwin"= { url = "https://github.com/nostalume/shed/releases/download/v${version}/shed-macos-aarch64"; hash = "sha256-/2zhiE3nt20XlaAhGRRJeVP3bkeOUchZa8w92sCUxEA="; }; # aarch64-darwin
   };
 
   src = sources.${stdenv.hostPlatform.system}
